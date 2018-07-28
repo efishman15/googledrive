@@ -18,6 +18,7 @@ namespace GoogleDrive
         private void button1_Click(object sender, EventArgs e)
         {
             drive = new Drive();
+            drive.ProcessPresentation(ConfigurationManager.AppSettings["SpecificPresentationId"]);
             //drive.BuildPresentationsList(ConfigurationManager.AppSettings["rootFolderId"]);
             //drive.SavePresentationsList();
         }

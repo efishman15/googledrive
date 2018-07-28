@@ -1,7 +1,9 @@
 ﻿using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
+using Google.Apis.Requests;
 using Google.Apis.Services;
 using Google.Apis.Slides.v1;
+using Google.Apis.Slides.v1.Data;
 using Google.Apis.Util.Store;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -18,6 +20,7 @@ namespace GoogleDrive
         #region Class Members
 
         DriveService driveService;
+        SlidesService slidesService;
         static string[] Scopes = { DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
         static string ApplicationName = "Google Drive";
 
@@ -45,6 +48,12 @@ namespace GoogleDrive
 
             // Create Drive API service.
             driveService = new DriveService(new BaseClientService.Initializer()
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = ApplicationName,
+            });
+
+            slidesService = new SlidesService(new BaseClientService.Initializer()
             {
                 HttpClientInitializer = credential,
                 ApplicationName = ApplicationName,
@@ -121,8 +130,57 @@ namespace GoogleDrive
 
         }
 
+        public void ProcessPresentation(string presentationId)
+        {
+            var presentationRequest = slidesService.Presentations.Get(presentationId);
+            var presentation = presentationRequest.Execute();
+
+            var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
+            if (presentation.Slides[0].SlideProperties.NotesPage.PageElements[1].Shape.Text != null)
+            {
+                myBatchRequest.AddDeleteTextRequest(presentation.Slides[0].SlideProperties.NotesPage.PageElements[1].ObjectId);
+                var a = myBatchRequest.Execute();
+            }
+        }
+
         #endregion
 
+    }
+
+    public class MyBatchRequest
+    {
+        SlidesService slidesService;
+        BatchUpdatePresentationRequest batchUpdatePresentationRequest;
+        string presentationId;
+
+        public MyBatchRequest(SlidesService slidesService, string presentationId)
+        {
+            this.slidesService = slidesService;
+            batchUpdatePresentationRequest = new BatchUpdatePresentationRequest();
+            batchUpdatePresentationRequest.Requests = new List<Request>();
+            this.presentationId = presentationId;
+        }
+
+        public void AddDeleteTextRequest(string objectId)
+        {
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                DeleteText = new DeleteTextRequest()
+                {
+                    ObjectId = objectId,
+                    TextRange = new Range
+                    {
+                        Type = "ALL"
+                    }
+                }
+            });
+        }
+
+        public BatchUpdatePresentationResponse Execute()
+        {
+            var batchUpdateRequest = slidesService.Presentations.BatchUpdate(batchUpdatePresentationRequest, presentationId);
+            return batchUpdateRequest.Execute();
+        }
     }
 }
 
