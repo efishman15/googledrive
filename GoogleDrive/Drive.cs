@@ -170,33 +170,76 @@ namespace GoogleDrive
             var nextSlideText = ConfigurationManager.AppSettings["NextSlideText"] + "\t";
             var lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
 
+            var speakerNotesTextStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings["SpeakerNotesTextStyle"]);
+            var speakerNotesTextStyleFields = ConfigurationManager.AppSettings["SpeakerNotestTextStyleFields"];
+            var slideIdTextBoxTextStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings["SlideIdTextBoxTextStyle"]);
+            var slideIdTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideIdTextBoxTextStyleFields"];
+
+            var slidePageIdSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlidePageIdSize"]);
+            var slidePageIdTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlidePageIdTransform"]);
+
             for (var i=0; i<presentation.Slides.Count-1; i++)
             {
-                var myBatchRequest = new MyBatchRequest(slidesService, presentationId, presentation.Slides[i]);
-                myBatchRequest.AddDeleteTextRequest();
+                var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
+                myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId, presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].Shape);
 
                 var currentStartIndex = 0;
+                var objectId = presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId;
 
-                myBatchRequest.AddInsertTextRequest(firstSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + firstSlideText.Length, firstSlidelink);
+                myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length, firstSlidelink);
                 currentStartIndex += firstSlideText.Length;
 
-                myBatchRequest.AddInsertTextRequest(prevSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + prevSlideText.Length, prevSlidelink);
+                myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length, prevSlidelink);
                 currentStartIndex += prevSlideText.Length;
 
-                myBatchRequest.AddInsertTextRequest(nextSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + nextSlideText.Length, nextSlidelink);
+                myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length, nextSlidelink);
                 currentStartIndex += nextSlideText.Length;
 
-                myBatchRequest.AddInsertTextRequest(lastSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + lastSlideText.Length, lastSlidelink);
+                myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length, lastSlidelink);
                 currentStartIndex += lastSlideText.Length;
 
-                myBatchRequest.AddUpdateParagraphStyleRequest(false);
+                myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
 
-                myBatchRequest.Execute();
+                var slidePageIdIndex = -1;
+                for (var j=0; j<presentation.Slides[i].PageElements.Count; j++)
+                {
+                    if (presentation.Slides[i].PageElements[j].Shape != null && 
+                        presentation.Slides[i].PageElements[j].Shape.ShapeType == "TEXT_BOX" &&
+                        presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
+                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
+                    {
+                        slidePageIdIndex = j;
+                        break;
+                    }
+                }
 
+                if (slidePageIdIndex > -1)
+                {
+                    //Page Id text box exists
+                    myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
+                    myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, (i+1).ToString(),0);
+                }
+                else
+                {
+                    //Create a new text box to hold the slide number
+                    myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slidePageIdSize, slidePageIdTransform);
+                }
+
+                var batchResponse = myBatchRequest.Execute();
+                if (batchResponse.Replies[batchResponse.Replies.Count-1].CreateShape != null)
+                {
+                    //Read presentation with the newly created text box for the slide id
+                    //presentation = presentationRequest.Execute();
+                    var addSlideIdTextBatchRequest = new MyBatchRequest(slidesService, presentationId);
+                    addSlideIdTextBatchRequest.AddInsertTextRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, (i + 1).ToString(), 0);
+                    addSlideIdTextBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, slideIdTextBoxTextStyle, slideIdTextBoxTextStyleFields,  0, (i + 1).ToString().Length, null);
+                    addSlideIdTextBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, false);
+                    addSlideIdTextBatchRequest.Execute();
+                }
             }
 
         }
@@ -213,19 +256,17 @@ namespace GoogleDrive
 
         SlidesService slidesService;
         BatchUpdatePresentationRequest batchUpdatePresentationRequest;
-        Page slide;
         string presentationId;
 
         #endregion
 
         #region C'Tor/D'Tor
-        public MyBatchRequest(SlidesService slidesService, string presentationId, Page slide = null)
+        public MyBatchRequest(SlidesService slidesService, string presentationId)
         {
             this.slidesService = slidesService;
             batchUpdatePresentationRequest = new BatchUpdatePresentationRequest();
             batchUpdatePresentationRequest.Requests = new List<Request>();
             this.presentationId = presentationId;
-            this.slide = slide;
         }
         #endregion
 
@@ -251,9 +292,9 @@ namespace GoogleDrive
         /// <summary>
         /// Adds a DeleteText request to an object - to delete its entire text
         /// </summary>
-        public void AddDeleteTextRequest()
+        public void AddDeleteTextRequest(string objectId, Shape shape)
         {
-            if (slide.SlideProperties.NotesPage.PageElements[1].Shape.Text == null)
+            if (shape.Text == null)
             {
                 return;
             }
@@ -262,7 +303,7 @@ namespace GoogleDrive
             {
                 DeleteText = new DeleteTextRequest()
                 {
-                    ObjectId = slide.SlideProperties.NotesPage.PageElements[1].ObjectId,
+                    ObjectId = objectId,
                     TextRange = new Range
                     {
                         Type = "ALL"
@@ -275,13 +316,13 @@ namespace GoogleDrive
         /// Adds an InsertText request to an object
         /// </summary>
         /// <param name="objectId"></param>
-        public void AddInsertTextRequest(string text, int insertionIndex)
+        public void AddInsertTextRequest(string objectId, string text, int insertionIndex)
         {
             batchUpdatePresentationRequest.Requests.Add(new Request()
             {
                 InsertText = new InsertTextRequest()
                 {
-                    ObjectId = slide.SlideProperties.NotesPage.PageElements[1].ObjectId,
+                    ObjectId = objectId,
                     Text = text,
                     InsertionIndex = insertionIndex
                 }
@@ -294,19 +335,25 @@ namespace GoogleDrive
         /// <param name="startIndex"></param>
         /// <param name="endIndex"></param>
         /// <param name="link"></param>
-        public void AddUpdateTextStyleRequest(int startIndex, int endIndex, Link link)
+        public void AddUpdateTextStyleRequest(string objectId, TextStyle textStyle, string textStyleFields, int startIndex, int endIndex, Link link = null)
         {
-            var textStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings["TextStyle"]);
-            var fields = ConfigurationManager.AppSettings["TextStyleFields"];
-
-            textStyle.Link = link;
-            fields += ",link";
+            string fields;
+            if (link != null)
+            {
+                textStyle.Link = link;
+                fields = String.Copy(textStyleFields) + ",link";
+            }
+            else
+            {
+                textStyle.Link = null;
+                fields = textStyleFields;
+            }
 
             batchUpdatePresentationRequest.Requests.Add(new Request()
             {
                 UpdateTextStyle = new UpdateTextStyleRequest()
                 {
-                    ObjectId = slide.SlideProperties.NotesPage.PageElements[1].ObjectId,
+                    ObjectId = objectId,
                     Style = textStyle,
                     TextRange = new Range()
                     {
@@ -323,7 +370,7 @@ namespace GoogleDrive
         /// Updates the entire text of the speaker notes with a paragraph style defined in config
         /// </summary>
         /// <param name="rtl">2 separate paragraph styles in config for ltr, rtl</param>
-        public void AddUpdateParagraphStyleRequest(bool rtl)
+        public void AddUpdateParagraphStyleRequest(string objectId, bool rtl)
         {
             ParagraphStyle paragraphStyle;
             if (!rtl)
@@ -341,13 +388,36 @@ namespace GoogleDrive
                 UpdateParagraphStyle = new UpdateParagraphStyleRequest()
                 {
                     
-                    ObjectId = slide.SlideProperties.NotesPage.PageElements[1].ObjectId,
+                    ObjectId = objectId,
                     Style = paragraphStyle,
                     TextRange = new Range()
                     {
                         Type = "ALL"
                     },
                     Fields = fields
+                }
+            });
+        }
+
+        /// <summary>
+        /// Create a text box to hold the slide number
+        /// </summary>
+        /// <param name="pageObjectId"></param>
+        /// <param name="size"></param>
+        /// <param name="transform"></param>
+        public void AddCreateShapeRequest(string pageObjectId, Size size, AffineTransform transform)
+        {
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                CreateShape = new CreateShapeRequest()
+                {
+                    ShapeType = "TEXT_BOX",
+                    ElementProperties = new PageElementProperties()
+                    {
+                        PageObjectId = pageObjectId,
+                        Size = size,
+                        Transform = transform
+                    }
                 }
             });
         }
