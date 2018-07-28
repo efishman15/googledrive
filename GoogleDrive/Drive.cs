@@ -148,27 +148,57 @@ namespace GoogleDrive
         {
             var lastSlidelink = new Link() { RelativeLink = "LAST_SLIDE" };
             var nextSlidelink = new Link() { RelativeLink = "NEXT_SLIDE" };
-            var prevSlidelink = new Link() { RelativeLink = "PREV_SLIDE" };
+            var prevSlidelink = new Link() { RelativeLink = "PREVIOUS_SLIDE" };
             var firstSlidelink = new Link() { RelativeLink = "FIRST_SLIDE" };
 
             var presentationRequest = slidesService.Presentations.Get(presentationId);
             var presentation = presentationRequest.Execute();
 
-            var myBatchRequest = new MyBatchRequest(slidesService, presentationId, presentation.Slides[0]);
-            myBatchRequest.AddDeleteTextRequest();
+            if (presentation.Slides[presentation.Slides.Count-1].PageElements.Count > 2)
+            {
+                //Create empty slide as the last slide
+                var createNewSlideBatchRequest = new MyBatchRequest(slidesService, presentationId);
+                createNewSlideBatchRequest.AddCreateSlideRequest(presentation.Slides.Count);
+                createNewSlideBatchRequest.Execute();
 
-            var currentStartIndex = 0;
-            var lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
-            myBatchRequest.AddInsertTextRequest(lastSlideText, currentStartIndex);
-            myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + lastSlideText.Length, lastSlidelink);
-            currentStartIndex += lastSlideText.Length;
+                //Read presentation with the newly created slide
+                presentation = presentationRequest.Execute();
+            }
 
+            var firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
+            var prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
             var nextSlideText = ConfigurationManager.AppSettings["NextSlideText"] + "\t";
-            myBatchRequest.AddInsertTextRequest(nextSlideText, currentStartIndex);
-            myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + nextSlideText.Length, nextSlidelink);
-            currentStartIndex += nextSlideText.Length;
+            var lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
 
-            var a = myBatchRequest.Execute();
+            for (var i=0; i<presentation.Slides.Count-1; i++)
+            {
+                var myBatchRequest = new MyBatchRequest(slidesService, presentationId, presentation.Slides[i]);
+                myBatchRequest.AddDeleteTextRequest();
+
+                var currentStartIndex = 0;
+
+                myBatchRequest.AddInsertTextRequest(firstSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + firstSlideText.Length, firstSlidelink);
+                currentStartIndex += firstSlideText.Length;
+
+                myBatchRequest.AddInsertTextRequest(prevSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + prevSlideText.Length, prevSlidelink);
+                currentStartIndex += prevSlideText.Length;
+
+                myBatchRequest.AddInsertTextRequest(nextSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + nextSlideText.Length, nextSlidelink);
+                currentStartIndex += nextSlideText.Length;
+
+                myBatchRequest.AddInsertTextRequest(lastSlideText, currentStartIndex);
+                myBatchRequest.AddUpdateTextStyleRequest(currentStartIndex, currentStartIndex + lastSlideText.Length, lastSlidelink);
+                currentStartIndex += lastSlideText.Length;
+
+                myBatchRequest.AddUpdateParagraphStyleRequest(false);
+
+                myBatchRequest.Execute();
+
+            }
+
         }
 
         #endregion
@@ -189,7 +219,7 @@ namespace GoogleDrive
         #endregion
 
         #region C'Tor/D'Tor
-        public MyBatchRequest(SlidesService slidesService, string presentationId, Page slide)
+        public MyBatchRequest(SlidesService slidesService, string presentationId, Page slide = null)
         {
             this.slidesService = slidesService;
             batchUpdatePresentationRequest = new BatchUpdatePresentationRequest();
@@ -200,6 +230,23 @@ namespace GoogleDrive
         #endregion
 
         #region Methods
+        /// <summary>
+        /// Adds a CreateSlide request - for the "empty board" slide in the end
+        /// </summary>
+        public void AddCreateSlideRequest(int insertionIndex)
+        {
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                CreateSlide = new CreateSlideRequest()
+                {
+                    SlideLayoutReference = new LayoutReference
+                    {
+                        LayoutId = ConfigurationManager.AppSettings["LayoutObjectId"]
+                    },
+                    InsertionIndex = insertionIndex
+                }
+            });
+        }
 
         /// <summary>
         /// Adds a DeleteText request to an object - to delete its entire text
@@ -266,6 +313,39 @@ namespace GoogleDrive
                         Type = "FIXED_RANGE",
                         StartIndex = startIndex,
                         EndIndex = endIndex
+                    },
+                    Fields = fields
+                }
+            });
+        }
+
+        /// <summary>
+        /// Updates the entire text of the speaker notes with a paragraph style defined in config
+        /// </summary>
+        /// <param name="rtl">2 separate paragraph styles in config for ltr, rtl</param>
+        public void AddUpdateParagraphStyleRequest(bool rtl)
+        {
+            ParagraphStyle paragraphStyle;
+            if (!rtl)
+            {
+                paragraphStyle = JsonConvert.DeserializeObject<ParagraphStyle>(ConfigurationManager.AppSettings["ParagraphStyleLTR"]);
+            }
+            else
+            {
+                paragraphStyle = JsonConvert.DeserializeObject<ParagraphStyle>(ConfigurationManager.AppSettings["ParagraphStyleRTL"]);
+            }
+            var fields = ConfigurationManager.AppSettings["ParagraphStyleFields"];
+
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                UpdateParagraphStyle = new UpdateParagraphStyleRequest()
+                {
+                    
+                    ObjectId = slide.SlideProperties.NotesPage.PageElements[1].ObjectId,
+                    Style = paragraphStyle,
+                    TextRange = new Range()
+                    {
+                        Type = "ALL"
                     },
                     Fields = fields
                 }
