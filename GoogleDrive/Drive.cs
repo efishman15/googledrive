@@ -142,6 +142,7 @@ namespace GoogleDrive
         ///     b) Add Links to: "Prev Slide", "Next Slide" (to skip animated hints/solutions, "Last Slide" (empty board)
         ///     c) Adjust slide number text box
         /// 3) For the last slide: add "TOC": a link to each slide (except this last slide)
+        /// 4) Optional - if slide contains only a single image in the body - align it to top/bottom 
         /// </summary>
         /// <param name="presentationId"></param>
         public void ProcessPresentation(string presentationId)
@@ -242,6 +243,8 @@ namespace GoogleDrive
                 }
             }
 
+            var createTOCBatchRequest = new MyBatchRequest(slidesService, presentationId);
+            createTOCBatchRequest.Execute();
         }
 
         #endregion
