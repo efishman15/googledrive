@@ -130,6 +130,16 @@ namespace GoogleDrive
 
         }
 
+        /// <summary>
+        /// Adjusts the presentation:
+        /// 1) Adds an empty slide in the end, if it does not exist ("Empty board")
+        /// 2) For each slide (except the last one "empty board"):
+        ///     a) Delete existing speaker notes
+        ///     b) Add Links to: "Next Slide" (to skip animated hints/solutions, "Last Slide" (empty board)
+        ///     c) Adjust slide number text box
+        /// 3) For the last slide: add "TOC": a link to each slide (except this last slide)
+        /// </summary>
+        /// <param name="presentationId"></param>
         public void ProcessPresentation(string presentationId)
         {
             var presentationRequest = slidesService.Presentations.Get(presentationId);
