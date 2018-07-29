@@ -1,22 +1,22 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Windows.Forms;
+using System.Configuration;
 
 namespace GoogleDrive
 {
     static class Program
     {
-        /// <summary>
-        /// The main entry point for the application.
-        /// </summary>
-        [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new frmMain());
+            var drive = new Drive();
+            LogOutput("Started...");
+            drive.ProcessPresentation(ConfigurationManager.AppSettings["SpecificPresentationId"]);
+            LogOutput("Finished...(hit any key)");
+            Console.ReadLine();
+        }
+
+        static void LogOutput(string line)
+        {
+            Console.WriteLine(string.Format("{0}: {1}", DateTime.Now, line));
         }
     }
 }

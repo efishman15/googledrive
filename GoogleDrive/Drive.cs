@@ -15,6 +15,16 @@ using System.Threading;
 
 namespace GoogleDrive
 {
+    #region Enums
+
+    public enum AlignImage
+    {
+        TOP,
+        BOTTOM
+    }
+
+    #endregion
+
     #region Class Drive
     public class Drive
     {
@@ -141,8 +151,8 @@ namespace GoogleDrive
         ///     a) Delete existing speaker notes
         ///     b) Add Links to: "Prev Slide", "Next Slide" (to skip animated hints/solutions, "Last Slide" (empty board)
         ///     c) Adjust slide number text box
+        ///     d) if slide contains only a single image in the body - align it to top/bottom 
         /// 3) For the last slide: add "TOC": a link to each slide (except this last slide)
-        /// 4) Optional - if slide contains only a single image in the body - align it to top/bottom 
         /// </summary>
         /// <param name="presentationId"></param>
         public void ProcessPresentation(string presentationId)
@@ -168,6 +178,7 @@ namespace GoogleDrive
             var slidePageIdSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlidePageIdSize"]);
             var slidePageIdTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlidePageIdTransform"]);
 
+            var alignImage = (AlignImage)Enum.Parse(typeof(AlignImage), ConfigurationManager.AppSettings["ImageAlign"]);
 
             #endregion
 
@@ -199,12 +210,16 @@ namespace GoogleDrive
             {
                 var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
 
-                //Delete existing spearker notes from slide
+                #region Delete existing spearker notes from slide
+
                 currentStartIndex = 0;
                 objectId = presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId;
                 myBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].Shape);
 
-                //First
+                #endregion
+
+                #region Add First/Prev/Next/Last buttons
+
                 myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
                 myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
                 myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
@@ -230,6 +245,32 @@ namespace GoogleDrive
 
                 myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
 
+                #endregion
+
+                #region Align Image
+
+                if (presentation.Slides[i].PageElements.Count == 4)
+                {
+                    //A template slide contains 3 page elements: header text box, footer text box, slide id text box
+                    int mainImageIndex = -1;
+                    for (var k = 0; k < presentation.Slides[i].PageElements.Count; k++)
+                    {
+                        if (presentation.Slides[i].PageElements[k].Image != null)
+                        {
+                            mainImageIndex = k;
+                            break;
+                        }
+                    }
+                    if (mainImageIndex >= 0)
+                    {
+                        myBatchRequest.AddUpdatePageElementTransformRequest(presentation.Slides[i].PageElements[mainImageIndex], alignImage);
+                    }
+                }
+
+                #endregion
+
+                #region Slide Id Text Box
+
                 var slidePageIdIndex = -1;
                 for (var j=0; j<presentation.Slides[i].PageElements.Count; j++)
                 {
@@ -243,7 +284,7 @@ namespace GoogleDrive
                     }
                 }
 
-                if (slidePageIdIndex > -1)
+                if (slidePageIdIndex >= 0)
                 {
                     //Page Id text box exists
                     myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
@@ -266,6 +307,8 @@ namespace GoogleDrive
                     addSlideIdTextBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, false);
                     addSlideIdTextBatchRequest.Execute();
                 }
+
+                #endregion
             }
 
             #endregion
@@ -303,13 +346,14 @@ namespace GoogleDrive
     #endregion
 
     #region Class MyBatchRequest
+
     public class MyBatchRequest
     {
         #region Class Members
 
         SlidesService slidesService;
         BatchUpdatePresentationRequest batchUpdatePresentationRequest;
-        string presentationId;
+        readonly string presentationId;
 
         #endregion
 
@@ -317,8 +361,10 @@ namespace GoogleDrive
         public MyBatchRequest(SlidesService slidesService, string presentationId)
         {
             this.slidesService = slidesService;
-            batchUpdatePresentationRequest = new BatchUpdatePresentationRequest();
-            batchUpdatePresentationRequest.Requests = new List<Request>();
+            batchUpdatePresentationRequest = new BatchUpdatePresentationRequest
+            {
+                Requests = new List<Request>()
+            };
             this.presentationId = presentationId;
         }
         #endregion
@@ -478,6 +524,49 @@ namespace GoogleDrive
         }
 
         /// <summary>
+        /// Align image to top/bottom
+        /// </summary>
+        /// <param name="image"></param>
+        /// <param name="alignImage"></param>
+        public void AddUpdatePageElementTransformRequest(PageElement pageElement, AlignImage alignImage)
+        {
+            double? newYPosition = 0;
+            switch (alignImage)
+            {
+                case AlignImage.TOP:
+                    newYPosition = Convert.ToDouble(ConfigurationManager.AppSettings["ImageAlignTopPosition"]);
+                    break;
+
+                case AlignImage.BOTTOM:
+                    newYPosition = Convert.ToDouble(ConfigurationManager.AppSettings["ImageAlignBottomPosition"]) - (pageElement.Size.Height.Magnitude * pageElement.Transform.ScaleY);
+                    break;
+            }
+
+            if (pageElement.Transform.TranslateY == newYPosition.Value)
+            {
+                //Already in place - nothing to move
+                return;
+            }
+
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                UpdatePageElementTransform = new UpdatePageElementTransformRequest()
+                {
+                    ObjectId = pageElement.ObjectId,
+                    ApplyMode = "ABSOLUTE",
+                    Transform = new AffineTransform()
+                    {
+                        ScaleX = pageElement.Transform.ScaleX,
+                        ScaleY = pageElement.Transform.ScaleY,
+                        TranslateX = pageElement.Transform.TranslateX,
+                        TranslateY = newYPosition,
+                        Unit = "EMU"
+                    }
+                }
+            });
+        }
+
+        /// <summary>
         /// Executes the requests added to the list
         /// </summary>
         /// <returns></returns>
@@ -493,6 +582,7 @@ namespace GoogleDrive
         
         #endregion
     }
+    
     #endregion
 }
 
