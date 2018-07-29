@@ -11,22 +11,13 @@ namespace GoogleDrive
 
             if (args.Length > 0)
             {
-                var invalidArgs = false;
                 if (args.Length > 1)
                 {
-                    invalidArgs = true;
+                    PrintUsageAndExit(1);
                 }
-                else if (args[0] != "/RefreshList" && (!args[0].StartsWith("/Id=") || args[0].Length<5))
+                else if (args[0] != "/RefreshList" && (!args[0].StartsWith("/Id=") || args[0].Length<5) && (!args[0].StartsWith("/StartFrom=") || args[0].Length < 12))
                 {
-                    invalidArgs = true;
-                }
-                if (invalidArgs)
-                {
-                    Console.WriteLine("GoogleDrive [/Id=<PresentationId>] [/RefreshList]");
-                    Console.WriteLine("Only one of the parameters can be specified at a time:");
-                    Console.WriteLine("/Id              Process only this presentation");
-                    Console.WriteLine("/RefreshList     Processes all presentations - forces refresh of the local cache of presentations list");
-                    return;
+                    PrintUsageAndExit(2);
                 }
             }
             
@@ -39,16 +30,28 @@ namespace GoogleDrive
             #region Parse args
 
             string presentationId = null;
+            int startFromIndex = 0;
             
             var refreshCache = false;
             if (args.Length > 0) {
+                if (args[0] == "/?")
+                {
+                    PrintUsageAndExit(0);
+                }
                 if (args[0].StartsWith("/Id="))
                 {
                     presentationId = args[0].Split('=')[1];
                 }
-                else
+                else if (args[0] == "/RefreshList")
                 {
                     refreshCache = true;
+                }
+                else
+                {
+                    if (!Int32.TryParse(args[0].Split('=')[1], out startFromIndex))
+                    {
+                        PrintUsageAndExit(3);
+                    }
                 }
             }
 
@@ -74,7 +77,15 @@ namespace GoogleDrive
                     LogOutput("Finished building presentations list...");
                 }
                 LogOutput(string.Format("Processing {0} presentations...", drive.Presentations.Count));
-                for (var i=0; i<drive.Presentations.Count; i++)
+                if (startFromIndex > drive.Presentations.Count-1)
+                {
+                    PrintUsageAndExit(4);
+                }
+                if (startFromIndex > 0)
+                {
+                    LogOutput(string.Format("Skipping {0} presentations...", startFromIndex));
+                }
+                for (var i=startFromIndex; i<drive.Presentations.Count; i++)
                 {
                     drive.ProcessPresentation(drive.Presentations[i]);
 
@@ -94,5 +105,15 @@ namespace GoogleDrive
             Console.WriteLine(string.Format("\n{0}: {1}", DateTime.Now, line));
         }
 
+        static void PrintUsageAndExit(int exitCode)
+        {
+            Console.WriteLine("GoogleDrive [/?] [/Id=<PresentationId>] [/RefreshList] [/StartFrom=<Index>]");
+            Console.WriteLine("Only one of the parameters can be specified at a time:");
+            Console.WriteLine("/Id          Process only this presentation");
+            Console.WriteLine("/RefreshList Forces refresh of the local cache");
+            Console.WriteLine("/StartFrom   Skips succeeded presentations");
+            Console.WriteLine("/?           Prints this help");
+            Environment.Exit(exitCode);
+        }
     }
 }
