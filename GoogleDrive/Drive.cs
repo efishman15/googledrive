@@ -147,13 +147,38 @@ namespace GoogleDrive
         /// <param name="presentationId"></param>
         public void ProcessPresentation(string presentationId)
         {
+            #region Load variables
+
+            string objectId;
+            int currentStartIndex;
+
             var lastSlidelink = new Link() { RelativeLink = "LAST_SLIDE" };
             var nextSlidelink = new Link() { RelativeLink = "NEXT_SLIDE" };
             var prevSlidelink = new Link() { RelativeLink = "PREVIOUS_SLIDE" };
             var firstSlidelink = new Link() { RelativeLink = "FIRST_SLIDE" };
 
+            var firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
+            var prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
+            var nextSlideText = ConfigurationManager.AppSettings["NextSlideText"] + "\t";
+            var lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
+
+            var speakerNotesTextStyleFields = ConfigurationManager.AppSettings["SpeakerNotestTextStyleFields"];
+            var slideIdTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideIdTextBoxTextStyleFields"];
+
+            var slidePageIdSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlidePageIdSize"]);
+            var slidePageIdTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlidePageIdTransform"]);
+
+
+            #endregion
+
+            #region Load Presentation
+
             var presentationRequest = slidesService.Presentations.Get(presentationId);
             var presentation = presentationRequest.Execute();
+
+            #endregion
+
+            #region Create Empty Slide (if neccessary)
 
             if (presentation.Slides[presentation.Slides.Count-1].PageElements.Count > 2)
             {
@@ -166,41 +191,41 @@ namespace GoogleDrive
                 presentation = presentationRequest.Execute();
             }
 
-            var firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
-            var prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
-            var nextSlideText = ConfigurationManager.AppSettings["NextSlideText"] + "\t";
-            var lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
+            #endregion
 
-            var speakerNotesTextStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings["SpeakerNotesTextStyle"]);
-            var speakerNotesTextStyleFields = ConfigurationManager.AppSettings["SpeakerNotestTextStyleFields"];
-            var slideIdTextBoxTextStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings["SlideIdTextBoxTextStyle"]);
-            var slideIdTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideIdTextBoxTextStyleFields"];
-
-            var slidePageIdSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlidePageIdSize"]);
-            var slidePageIdTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlidePageIdTransform"]);
+            #region Slides loop - processing all but last slide
 
             for (var i=0; i<presentation.Slides.Count-1; i++)
             {
                 var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
-                myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId, presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].Shape);
 
-                var currentStartIndex = 0;
-                var objectId = presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId;
+                //Delete existing spearker notes from slide
+                currentStartIndex = 0;
+                objectId = presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId;
+                myBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].Shape);
 
+                //First
                 myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length, firstSlidelink);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
                 currentStartIndex += firstSlideText.Length;
 
+                //Prev
                 myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length, prevSlidelink);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length - 1, prevSlidelink, false);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + prevSlideText.Length - 1, currentStartIndex + prevSlideText.Length, null, false);
                 currentStartIndex += prevSlideText.Length;
 
+                //Next
                 myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length, nextSlidelink);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length - 1, nextSlidelink, false);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + nextSlideText.Length - 1, currentStartIndex + nextSlideText.Length, null, false);
                 currentStartIndex += nextSlideText.Length;
 
+                //Last
                 myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, speakerNotesTextStyle, speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length, lastSlidelink);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length - 1, lastSlidelink, false);
+                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + lastSlideText.Length - 1, currentStartIndex + lastSlideText.Length, null, false);
                 currentStartIndex += lastSlideText.Length;
 
                 myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
@@ -237,14 +262,39 @@ namespace GoogleDrive
                     //presentation = presentationRequest.Execute();
                     var addSlideIdTextBatchRequest = new MyBatchRequest(slidesService, presentationId);
                     addSlideIdTextBatchRequest.AddInsertTextRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, (i + 1).ToString(), 0);
-                    addSlideIdTextBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, slideIdTextBoxTextStyle, slideIdTextBoxTextStyleFields,  0, (i + 1).ToString().Length, null);
+                    addSlideIdTextBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields,  0, (i + 1).ToString().Length, null);
                     addSlideIdTextBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, false);
                     addSlideIdTextBatchRequest.Execute();
                 }
             }
 
+            #endregion
+
+            #region Process Last Slide (TOC)
+
             var createTOCBatchRequest = new MyBatchRequest(slidesService, presentationId);
+            objectId = presentation.Slides[presentation.Slides.Count-1].SlideProperties.NotesPage.PageElements[1].ObjectId;
+
+            createTOCBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].Shape);
+
+            currentStartIndex = 0;
+            string currentPageIdString;
+            for(var i=1; i<=presentation.Slides.Count-1; i++)
+            {
+                var link = new Link()
+                {
+                    SlideIndex = i-1
+                };
+                currentPageIdString = (i).ToString("00") + "\t";
+                createTOCBatchRequest.AddInsertTextRequest(objectId, currentPageIdString, currentStartIndex);
+                //Link - will not contain the tab ("\t")
+                createTOCBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + currentPageIdString.Length - 1, link);
+                currentStartIndex += currentPageIdString.Length;
+            }
+            createTOCBatchRequest.AddUpdateParagraphStyleRequest(objectId, true);
             createTOCBatchRequest.Execute();
+            
+            #endregion
         }
 
         #endregion
@@ -338,18 +388,20 @@ namespace GoogleDrive
         /// <param name="startIndex"></param>
         /// <param name="endIndex"></param>
         /// <param name="link"></param>
-        public void AddUpdateTextStyleRequest(string objectId, TextStyle textStyle, string textStyleFields, int startIndex, int endIndex, Link link = null)
+        public void AddUpdateTextStyleRequest(string objectId, string textStyleConfigKey, string textStyleFields, int startIndex, int endIndex, Link link = null, bool underline = true)
         {
-            string fields;
+            var fields = String.Copy(textStyleFields);
+            var textStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings[textStyleConfigKey]);
+
             if (link != null)
             {
                 textStyle.Link = link;
-                fields = String.Copy(textStyleFields) + ",link";
+                fields += ",link";
             }
-            else
+            if (!underline)
             {
-                textStyle.Link = null;
-                fields = textStyleFields;
+                textStyle.Underline = false;
+                fields += ",underline";
             }
 
             batchUpdatePresentationRequest.Requests.Add(new Request()
