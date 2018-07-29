@@ -186,6 +186,7 @@ namespace GoogleDrive
 
             var presentationRequest = slidesService.Presentations.Get(presentationId);
             var presentation = presentationRequest.Execute();
+            var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
 
             #endregion
 
@@ -208,8 +209,6 @@ namespace GoogleDrive
 
             for (var i=0; i<presentation.Slides.Count-1; i++)
             {
-                var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
-
                 #region Delete existing spearker notes from slide
 
                 currentStartIndex = 0;
@@ -336,7 +335,7 @@ namespace GoogleDrive
             }
             createTOCBatchRequest.AddUpdateParagraphStyleRequest(objectId, true);
             createTOCBatchRequest.Execute();
-            
+
             #endregion
         }
 
@@ -354,6 +353,7 @@ namespace GoogleDrive
         SlidesService slidesService;
         BatchUpdatePresentationRequest batchUpdatePresentationRequest;
         readonly string presentationId;
+        readonly int sleepAfterExecuteBatchRequest; 
 
         #endregion
 
@@ -366,6 +366,7 @@ namespace GoogleDrive
                 Requests = new List<Request>()
             };
             this.presentationId = presentationId;
+            sleepAfterExecuteBatchRequest = Convert.ToInt32(ConfigurationManager.AppSettings["SleepAfterExecuteBatchRequest"]);
         }
         #endregion
 
@@ -575,7 +576,11 @@ namespace GoogleDrive
             if (batchUpdatePresentationRequest.Requests != null && batchUpdatePresentationRequest.Requests.Count > 0)
             {
                 var batchUpdateRequest = slidesService.Presentations.BatchUpdate(batchUpdatePresentationRequest, presentationId);
-                return batchUpdateRequest.Execute();
+                var response = batchUpdateRequest.Execute();
+
+                Thread.Sleep(sleepAfterExecuteBatchRequest);
+
+                return response;
             }
             return null;
         }

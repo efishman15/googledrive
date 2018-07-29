@@ -77,6 +77,7 @@ namespace GoogleDrive
                 for (var i=0; i<drive.Presentations.Count; i++)
                 {
                     drive.ProcessPresentation(drive.Presentations[i]);
+
                     Console.Write(string.Format("\rProcessed {0} of {1} presentations...", i+1, drive.Presentations.Count));
                 }
                 #endregion
