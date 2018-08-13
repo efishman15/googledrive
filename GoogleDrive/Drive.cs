@@ -202,13 +202,47 @@ namespace GoogleDrive
                 //Read presentation with the newly created slide
                 presentation = presentationRequest.Execute();
             }
+            else
+            {
+                //Deals with the case that the empty slide contains an unneccessary header/footer text
+                for (var i=0; i < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; i++)
+                {
+                    myBatchRequest.AddDeleteTextRequest(presentation.Slides[presentation.Slides.Count - 1].PageElements[i].ObjectId, presentation.Slides[presentation.Slides.Count - 1].PageElements[i].Shape);
+                }
+            }
 
             #endregion
 
             #region Slides loop - processing all but last slide
 
+            // TEMP - CHECK HOMEWORK SLIDE
+            for (var l = 0; l < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; l++)
+            {
+                if (presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape != null &&
+                    presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Placeholder != null &&
+                    (presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Placeholder.ParentObjectId == "g24d2e8488f_0_410" || presentation.Slides[presentation.Slides.Count - 2].PageElements[l].Shape.Placeholder.ParentObjectId == "g24d2e8488f_0_417") &&
+                    (presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Text == null ||
+                    presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Text.TextElements[1].TextRun.Content != "שיעורי בית\n"))
+                {
+                    Console.WriteLine(presentation.PresentationId + " - fix homework slide ");
+                }
+            }
+
             for (var i=0; i<presentation.Slides.Count-1; i++)
             {
+                // TEMP - CHECK TITLES in EACH SLIDE if contain specific text
+                for (var h=0; h<presentation.Slides[i].PageElements.Count; h++)
+                {
+                    if (presentation.Slides[i].PageElements[h].Shape != null &&
+                        presentation.Slides[i].PageElements[h].Shape.Placeholder != null &&
+                        presentation.Slides[i].PageElements[h].Shape.Placeholder.ParentObjectId == "g24d2e8488f_0_410" &&
+                        presentation.Slides[i].PageElements[h].Shape.Text != null &&
+                        presentation.Slides[i].PageElements[h].Shape.Text.TextElements[1].TextRun.Content.Contains("שאלה"))
+                    {
+                        Console.WriteLine(presentation.PresentationId + " - fix title in slide " + (i + 1).ToString());
+                    }
+                }
+
                 #region Delete existing spearker notes from slide
 
                 currentStartIndex = 0;
@@ -296,6 +330,8 @@ namespace GoogleDrive
                 }
 
                 var batchResponse = myBatchRequest.Execute();
+                myBatchRequest.ClearRequests();
+
                 if (batchResponse.Replies[batchResponse.Replies.Count-1].CreateShape != null)
                 {
                     //Read presentation with the newly created text box for the slide id
@@ -568,6 +604,21 @@ namespace GoogleDrive
         }
 
         /// <summary>
+        /// Deletes the specified object from the slide
+        /// </summary>
+        /// <param name="objectId"></param>
+        public void AddDeleteObjectRequest(string objectId)
+        {
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                DeleteObject = new DeleteObjectRequest()
+                {
+                    ObjectId = objectId
+                }
+            });
+        }
+
+        /// <summary>
         /// Executes the requests added to the list
         /// </summary>
         /// <returns></returns>
@@ -578,13 +629,23 @@ namespace GoogleDrive
                 var batchUpdateRequest = slidesService.Presentations.BatchUpdate(batchUpdatePresentationRequest, presentationId);
                 var response = batchUpdateRequest.Execute();
 
-                Thread.Sleep(sleepAfterExecuteBatchRequest);
+                if (sleepAfterExecuteBatchRequest > 0)
+                {
+                    Thread.Sleep(sleepAfterExecuteBatchRequest);
+                }
 
                 return response;
             }
             return null;
         }
-        
+
+        /// <summary>
+        /// Clears the requests collection
+        /// </summary>
+        public void ClearRequests()
+        {
+            batchUpdatePresentationRequest.Requests = new List<Request>();
+        }
         #endregion
     }
     
