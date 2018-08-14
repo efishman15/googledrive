@@ -69,14 +69,17 @@ namespace GoogleDrive
             {
                 #region Process all presentations
 
+                var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
                 if (refreshCache || drive.Presentations.Count == 0)
                 {
                     LogOutput("Building presentations list...");
-                    drive.BuildPresentationsList(ConfigurationManager.AppSettings["rootFolderId"]);
+                    drive.ClearPresentationsList();
+                    drive.BuildPresentationsList(rootFolderId, true);
                     drive.SavePresentationsList();
                     LogOutput("Finished building presentations list...");
                 }
-                LogOutput(string.Format("Processing {0} presentations...", drive.Presentations.Count));
+                LogOutput(string.Format("Processing {0} presentations, root folder: {1}", drive.Presentations.Count, drive.GetFolderName(rootFolderId)));
+
                 if (startFromIndex > drive.Presentations.Count-1)
                 {
                     PrintUsageAndExit(4);

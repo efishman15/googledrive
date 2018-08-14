@@ -35,8 +35,7 @@ namespace GoogleDrive
         static string[] Scopes = { DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
         static string ApplicationName = "Google Drive";
         JsonSerializer jsonSerializer;
-
-        public List<string> Presentations { get; }
+        string foldersFilter;
 
         #endregion
 
@@ -94,38 +93,78 @@ namespace GoogleDrive
         }
         #endregion
 
+        #region Properties
+
+        /// <summary>
+        /// Returns the presentations list
+        /// </summary>
+        public List<string> Presentations { get; private set; }
+
+        #endregion
+
         #region Methods
+
+        public void ClearPresentationsList()
+        {
+           Presentations = new List<string>();
+        }
 
         /// <summary>
         /// Build recursivelly a list of all presentations to work on
         /// </summary>
         /// <param name="rootFolder"></param>
-        public void BuildPresentationsList(string rootFolder)
+        public void BuildPresentationsList(string rootFolder, bool isTop)
         {
-            string filter = "'" + rootFolder + "' in parents AND (mimeType = 'application/vnd.google-apps.folder' OR mimeType = 'application/vnd.google-apps.presentation') AND trashed=false";
+            string filter = "'" + rootFolder + "' in parents AND (mimeType = 'application/vnd.google-apps.folder') AND trashed=false";
             string pageToken = null;
+            if (isTop)
+            {
+                foldersFilter = string.Empty;
+            }
+
             do
             {
-                var request = driveService.Files.List();
-                request.Q = filter;
-                request.Spaces = "drive";
-                request.Fields = "nextPageToken, files(id, name, mimeType)";
-                request.PageToken = pageToken;
-                var result = request.Execute();
-                foreach (var file in result.Files)
+                var folderRequest = driveService.Files.List();
+                folderRequest.Q = filter;
+                folderRequest.Spaces = "drive";
+                folderRequest.Fields = "nextPageToken, files(id)";
+                folderRequest.PageToken = pageToken;
+                var folderResult = folderRequest.Execute();
+                foreach (var file in folderResult.Files)
                 {
-                    if (file.MimeType == "application/vnd.google-apps.presentation")
+                    if (foldersFilter == string.Empty)
                     {
-                        Presentations.Add(file.Id);
+                        foldersFilter += "(";
                     }
                     else
                     {
-                        //This is a folder - continue recurssion
-                        BuildPresentationsList(file.Id);
+                        foldersFilter += " or ";
                     }
+                    foldersFilter += "'" + file.Id + "' in parents";
+                    BuildPresentationsList(file.Id, false);
                 }
-                pageToken = result.NextPageToken;
+                pageToken = folderResult.NextPageToken;
             } while (pageToken != null);
+
+            if (isTop)
+            {
+                foldersFilter += ")";
+                filter = foldersFilter + " AND (mimeType = 'application/vnd.google-apps.presentation') AND trashed=false";
+                do
+                {
+                    var fileRequest = driveService.Files.List();
+                    fileRequest.Q = filter;
+                    fileRequest.Spaces = "drive";
+                    fileRequest.Fields = "nextPageToken, files(id)";
+                    fileRequest.PageToken = pageToken;
+                    var fileResult = fileRequest.Execute();
+                    foreach (var file in fileResult.Files)
+                    {
+                        Presentations.Add(file.Id);
+                    }
+                    pageToken = fileResult.NextPageToken;
+                } while (pageToken != null);
+            }
         }
 
         /// <summary>
@@ -133,15 +172,26 @@ namespace GoogleDrive
         /// </summary>
         public void SavePresentationsList()
         {
+            var outputFileName = ConfigurationManager.AppSettings["PresentationsListCache"];
+            if (File.Exists(outputFileName))
+            {
+                File.Delete(outputFileName);
+            }
             jsonSerializer.Converters.Add(new JavaScriptDateTimeConverter());
             jsonSerializer.NullValueHandling = NullValueHandling.Ignore;
-
-            using (StreamWriter sw = new StreamWriter(ConfigurationManager.AppSettings["PresentationsListCache"]))
+            using (StreamWriter sw = new StreamWriter(outputFileName))
             using (JsonWriter writer = new JsonTextWriter(sw))
             {
                 jsonSerializer.Serialize(writer, Presentations);
             }
 
+        }
+
+        public string GetFolderName(string folderId)
+        {
+            var folderRequest = driveService.Files.Get(folderId);
+            var folder = folderRequest.Execute();
+            return folder.Name;
         }
 
         /// <summary>
@@ -215,34 +265,8 @@ namespace GoogleDrive
 
             #region Slides loop - processing all but last slide
 
-            // TEMP - CHECK HOMEWORK SLIDE
-            for (var l = 0; l < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; l++)
-            {
-                if (presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape != null &&
-                    presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Placeholder != null &&
-                    (presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Placeholder.ParentObjectId == "g24d2e8488f_0_410" || presentation.Slides[presentation.Slides.Count - 2].PageElements[l].Shape.Placeholder.ParentObjectId == "g24d2e8488f_0_417") &&
-                    (presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Text == null ||
-                    presentation.Slides[presentation.Slides.Count-2].PageElements[l].Shape.Text.TextElements[1].TextRun.Content != "שיעורי בית\n"))
-                {
-                    Console.WriteLine(presentation.PresentationId + " - fix homework slide ");
-                }
-            }
-
             for (var i=0; i<presentation.Slides.Count-1; i++)
             {
-                // TEMP - CHECK TITLES in EACH SLIDE if contain specific text
-                for (var h=0; h<presentation.Slides[i].PageElements.Count; h++)
-                {
-                    if (presentation.Slides[i].PageElements[h].Shape != null &&
-                        presentation.Slides[i].PageElements[h].Shape.Placeholder != null &&
-                        presentation.Slides[i].PageElements[h].Shape.Placeholder.ParentObjectId == "g24d2e8488f_0_410" &&
-                        presentation.Slides[i].PageElements[h].Shape.Text != null &&
-                        presentation.Slides[i].PageElements[h].Shape.Text.TextElements[1].TextRun.Content.Contains("שאלה"))
-                    {
-                        Console.WriteLine(presentation.PresentationId + " - fix title in slide " + (i + 1).ToString());
-                    }
-                }
-
                 #region Delete existing spearker notes from slide
 
                 currentStartIndex = 0;
@@ -389,7 +413,6 @@ namespace GoogleDrive
         SlidesService slidesService;
         BatchUpdatePresentationRequest batchUpdatePresentationRequest;
         readonly string presentationId;
-        readonly int sleepAfterExecuteBatchRequest; 
 
         #endregion
 
@@ -402,7 +425,6 @@ namespace GoogleDrive
                 Requests = new List<Request>()
             };
             this.presentationId = presentationId;
-            sleepAfterExecuteBatchRequest = Convert.ToInt32(ConfigurationManager.AppSettings["SleepAfterExecuteBatchRequest"]);
         }
         #endregion
 
@@ -619,6 +641,27 @@ namespace GoogleDrive
         }
 
         /// <summary>
+        /// Replaces text globally in the entire presentation
+        /// </summary>
+        /// <param name="searchText"></param>
+        /// <param name="replaceText"></param>
+        public void AddReplaceAllTextRequest(string searchText, string replaceText)
+        {
+            batchUpdatePresentationRequest.Requests.Add(new Request()
+            {
+                ReplaceAllText = new ReplaceAllTextRequest()
+                {
+                    ContainsText = new SubstringMatchCriteria()
+                    {
+                        Text = searchText,
+                        MatchCase = false
+                    },
+                    ReplaceText = replaceText
+                }
+            });
+        }
+
+        /// <summary>
         /// Executes the requests added to the list
         /// </summary>
         /// <returns></returns>
@@ -628,11 +671,6 @@ namespace GoogleDrive
             {
                 var batchUpdateRequest = slidesService.Presentations.BatchUpdate(batchUpdatePresentationRequest, presentationId);
                 var response = batchUpdateRequest.Execute();
-
-                if (sleepAfterExecuteBatchRequest > 0)
-                {
-                    Thread.Sleep(sleepAfterExecuteBatchRequest);
-                }
 
                 return response;
             }
