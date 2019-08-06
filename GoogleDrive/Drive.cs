@@ -25,17 +25,172 @@ namespace GoogleDrive
 
     #endregion
 
+    #region Class CachePresentation
+
+    public class CachePresentation
+    {
+        #region Properties
+
+        public string PresentationId { get; private set; }
+        public string PresentationName { get; private set; }
+
+        #endregion
+
+        #region C'Tor/Dtor
+        public CachePresentation(string presentationId, string presentationName)
+        {
+            PresentationId = presentationId;
+            PresentationName = PresentationName;
+        }
+        #endregion
+    }
+    #endregion
+
+    #region Class CacheFolder
+    public class CacheFolder
+    {
+        #region Properties
+
+        public string FolderId { get; private set; }
+        public string FolderName { get; private set; }
+        public Dictionary<string, CacheFolder> Folders { get; set; }
+        public string ParentFolderId { get; private set; }
+        public List<CachePresentation> Presentations { get; private set; }
+        public int TotalPresentations { get; set; }
+        public int Level { get; set; }
+        public string Path { get; set; }
+
+        #endregion
+
+        #region C'Tor/Dtor
+        public CacheFolder(string folderId, string folderName, string parentFolderId)
+        {
+            FolderId = folderId;
+            FolderName = folderName;
+            Folders = new Dictionary<string, CacheFolder>();
+            ParentFolderId = parentFolderId;
+            Presentations = new List<CachePresentation>();
+            Path = string.Empty;
+        }
+        #endregion
+
+        #region Methods
+
+        /// <summary>
+        /// Adds a folder to the collection
+        /// </summary>
+        /// <param name="folderId"></param>
+        /// <param name="folderName"></param>
+        public void AddFolder(string folderId, string folderName, CacheFolder parent)
+        {
+            Folders.Add(folderId, new CacheFolder(folderId, folderName, this.FolderId));
+        }
+
+        public void AddPresentation(string presentationId, string presentationName)
+        {
+            Presentations.Add(new CachePresentation(presentationId, presentationName));
+            TotalPresentations++;
+        }
+        #endregion
+    }
+    #endregion
+
+    #region Class Cache
+    public class Cache
+    {
+        #region Properties
+        public Dictionary<string, CacheFolder> Folders { get; private set; }
+        public int TotalPresentations { get; set; }
+        public string DateCreated { get; set; }
+        #endregion
+
+        #region C'Tor/Dtor
+        public Cache()
+        {
+            Folders = new Dictionary<string, CacheFolder>();
+        }
+        #endregion
+
+        #region Methods
+
+        /// <summary>
+        /// Adds a presentation to the folder in the tree
+        /// </summary>
+        /// <param name="folderId"></param>
+        /// <param name="presentationId"></param>
+        /// <param name="presentationName"></param>
+        public void AddPresentationToFolder(string folderId, string presentationId, string presentationName)
+        {
+            var parentFolder = GetFolder(folderId, Folders);
+            if (parentFolder != null)
+            {
+                parentFolder.AddPresentation(presentationId, presentationName);
+                TotalPresentations++;
+
+                //Bubble counter up
+                var currentFolder = GetFolder(parentFolder.ParentFolderId,Folders);
+                while (currentFolder != null)
+                {
+                    currentFolder.TotalPresentations++;
+                    if (currentFolder.ParentFolderId != null)
+                    {
+                        currentFolder = GetFolder(currentFolder.ParentFolderId, Folders);
+                    }
+                    else
+                    {
+                        currentFolder = null;
+                    }
+                }
+
+            }
+        }
+
+        /// <summary>
+        /// Get a folder in the tree by its folder id (recurssive)
+        /// </summary>
+        /// <param name="folderId"></param>
+        /// <param name="folders"></param>
+        /// <returns></returns>
+        public CacheFolder GetFolder(string folderId, Dictionary<string, CacheFolder> folders)
+        {
+            if (folders.ContainsKey(folderId))
+            {
+                return folders[folderId];
+            }
+            else
+            {
+                foreach (var folderKey in folders.Keys)
+                {
+                    var folder = GetFolder(folderId, folders[folderKey].Folders);
+                    if (folder != null)
+                    {
+                        return folder;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        #endregion
+    }
+    #endregion
+
     #region Class Drive
+
     public class Drive
     {
         #region Class Members
 
-        DriveService driveService;
-        SlidesService slidesService;
-        static string[] Scopes = { DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
-        static string ApplicationName = "Google Drive";
-        JsonSerializer jsonSerializer;
-        string foldersFilter;
+        private DriveService driveService;
+        private SlidesService slidesService;
+        private static string[] Scopes = { DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
+        private static string ApplicationName = "Google Drive";
+        private JsonSerializer jsonSerializer;
+        private string foldersFilter;
+        private readonly int pathStartLevel;
+        private readonly string pathSeparator;
+        private readonly string folderNameSeparator;
 
         #endregion
 
@@ -81,13 +236,18 @@ namespace GoogleDrive
             {
                 using (StreamReader file = File.OpenText(ConfigurationManager.AppSettings["PresentationsListCache"]))
                 {
-                    Presentations = (List<string>)jsonSerializer.Deserialize(file, typeof(List<string>));
+                    Cache = (Cache)jsonSerializer.Deserialize(file, typeof(Cache));
                 }
             }
             else
             {
-                Presentations = new List<string>();
+                Cache = new Cache();
             }
+
+            pathStartLevel = Convert.ToInt32(ConfigurationManager.AppSettings["PathStartLevel"]);
+            pathSeparator = ConfigurationManager.AppSettings["PathSeparator"];
+            folderNameSeparator = ConfigurationManager.AppSettings["FolderNameSeparator"];
+
             #endregion
 
         }
@@ -98,30 +258,33 @@ namespace GoogleDrive
         /// <summary>
         /// Returns the presentations list
         /// </summary>
-        public List<string> Presentations { get; private set; }
+        public Cache Cache { get; private set; }
 
         #endregion
 
         #region Methods
 
-        public void ClearPresentationsList()
+        /// <summary>
+        /// Clears the cache
+        /// </summary>
+        public void ClearCache()
         {
-           Presentations = new List<string>();
+           Cache = new Cache();
         }
 
         /// <summary>
         /// Build recursivelly a list of all presentations to work on
         /// </summary>
-        /// <param name="rootFolder"></param>
-        public void BuildPresentationsList(string rootFolder, bool isTop)
+        /// <param name="rootFolderId"></param>
+        public void BuildPresentationsList(string rootFolderId, bool isTop, CacheFolder parentFolder)
         {
-            string filter = "'" + rootFolder + "' in parents AND (mimeType = 'application/vnd.google-apps.folder') AND trashed=false";
+            string filter = "'" + rootFolderId + "' in parents AND (mimeType = 'application/vnd.google-apps.folder') AND trashed=false";
             string pageToken = null;
+
             if (isTop)
             {
                 foldersFilter = string.Empty;
             }
-
             do
             {
                 var folderRequest = driveService.Files.List();
@@ -130,7 +293,7 @@ namespace GoogleDrive
                 folderRequest.Fields = "nextPageToken, files(id)";
                 folderRequest.PageToken = pageToken;
                 var folderResult = folderRequest.Execute();
-                foreach (var file in folderResult.Files)
+                foreach (var folder in folderResult.Files)
                 {
                     if (foldersFilter == string.Empty)
                     {
@@ -140,27 +303,51 @@ namespace GoogleDrive
                     {
                         foldersFilter += " or ";
                     }
-                    foldersFilter += "'" + file.Id + "' in parents";
-                    BuildPresentationsList(file.Id, false);
+                    foldersFilter += "'" + folder.Id + "' in parents";
+
+                    var newFolder = new CacheFolder(folder.Id, GetFolderName(folder.Id),parentFolder?.FolderId);
+                    if (parentFolder == null)
+                    {
+                        newFolder.Level = 1;
+                        Cache.Folders.Add(newFolder.FolderId, newFolder);
+                    }
+                    else
+                    {
+                        parentFolder.Folders.Add(newFolder.FolderId, newFolder);
+                        newFolder.Level = parentFolder.Level + 1;
+                    }
+
+                    BuildPresentationsList(folder.Id, false, newFolder);
                 }
                 pageToken = folderResult.NextPageToken;
             } while (pageToken != null);
 
             if (isTop)
             {
-                foldersFilter += ")";
+                if (foldersFilter == string.Empty)
+                {
+                   //No folders in root folder - just files
+                    foldersFilter = "('" + rootFolderId + "' in parents) ";
+                }
+                else
+                {
+                    foldersFilter += ")";
+                }
                 filter = foldersFilter + " AND (mimeType = 'application/vnd.google-apps.presentation') AND trashed=false";
                 do
                 {
-                    var fileRequest = driveService.Files.List();
-                    fileRequest.Q = filter;
-                    fileRequest.Spaces = "drive";
-                    fileRequest.Fields = "nextPageToken, files(id)";
-                    fileRequest.PageToken = pageToken;
-                    var fileResult = fileRequest.Execute();
+                    var filesRequest = driveService.Files.List();
+                    filesRequest.Q = filter;
+                    filesRequest.Spaces = "drive";
+                    filesRequest.Fields = "nextPageToken, files(id, name, parents)";
+                    filesRequest.PageToken = pageToken;
+                    var fileResult = filesRequest.Execute();
+                    
                     foreach (var file in fileResult.Files)
                     {
-                        Presentations.Add(file.Id);
+                        //If file is filed in more than 1 folder, add it only under the first folder
+                        //For the sake of this program - each presentation should be processed only once
+                        Cache.AddPresentationToFolder(file.Parents[0], file.Id, file.Name);
                     }
                     pageToken = fileResult.NextPageToken;
                 } while (pageToken != null);
@@ -168,30 +355,77 @@ namespace GoogleDrive
         }
 
         /// <summary>
+        /// Process the cache:
+        /// Add path to folders starting at "PathStartLevel" in config
+        /// </summary>
+        public void BuildFoldersPath(Dictionary<string, CacheFolder> root, string parentPath)
+        {
+            foreach(var folderKey in root.Keys)
+            {
+                if (root[folderKey].Level >= pathStartLevel)
+                {
+                    if (parentPath == string.Empty)
+                    {
+                        root[folderKey].Path = NormalizeFolderName(root[folderKey].FolderName);
+                    }
+                    else
+                    {
+                        root[folderKey].Path = parentPath + pathSeparator + NormalizeFolderName(root[folderKey].FolderName);
+                    }
+                }
+                BuildFoldersPath(root[folderKey].Folders, root[folderKey].Path);
+            }
+        }
+
+        /// <summary>
         /// Save presentations list to local cache file
         /// </summary>
-        public void SavePresentationsList()
+        public void SaveCache()
         {
             var outputFileName = ConfigurationManager.AppSettings["PresentationsListCache"];
             if (File.Exists(outputFileName))
             {
                 File.Delete(outputFileName);
             }
+            Cache.DateCreated = DateTime.Now.ToString();
             jsonSerializer.Converters.Add(new JavaScriptDateTimeConverter());
             jsonSerializer.NullValueHandling = NullValueHandling.Ignore;
             using (StreamWriter sw = new StreamWriter(outputFileName))
             using (JsonWriter writer = new JsonTextWriter(sw))
             {
-                jsonSerializer.Serialize(writer, Presentations);
+                jsonSerializer.Serialize(writer, Cache);
             }
 
         }
 
+        /// <summary>
+        /// Gets folder name using folder id
+        /// </summary>
+        /// <param name="folderId"></param>
+        /// <returns></returns>
         public string GetFolderName(string folderId)
         {
             var folderRequest = driveService.Files.Get(folderId);
             var folder = folderRequest.Execute();
             return folder.Name;
+        }
+
+        /// <summary>
+        /// Process all the presentations in a root folder and its sub folders
+        /// </summary>
+        /// <param name="rootFolder"></param>
+        public void ProcessFolderPresentations(CacheFolder rootFolder)
+        {
+            foreach(var cachePresentation in rootFolder.Presentations)
+            {
+                ProcessPresentation(cachePresentation.PresentationId);
+
+                //Process presentations in all subfolders
+                foreach (var cachedFolderKey in rootFolder.Folders.Keys)
+                {
+                    ProcessFolderPresentations(rootFolder.Folders[cachedFolderKey]);
+                }
+            }
         }
 
         /// <summary>
@@ -233,7 +467,7 @@ namespace GoogleDrive
             #endregion
 
             #region Load Presentation
-
+            
             var presentationRequest = slidesService.Presentations.Get(presentationId);
             var presentation = presentationRequest.Execute();
             var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
@@ -401,7 +635,26 @@ namespace GoogleDrive
 
         #endregion
 
+        #region Private Methods
+        
+        /// <summary>
+        /// Returns a normalized folder name - everything AFTER the folderNameSeparator in config (usually ".")
+        /// </summary>
+        /// <param name="folderName"></param>
+        /// <returns></returns>
+        private string NormalizeFolderName(string folderName)
+        {
+            if (!folderName.Contains(folderNameSeparator))
+            {
+                return folderName.Trim();
+            }
+
+            var splitArray = folderName.Split(folderNameSeparator.ToCharArray());
+            return splitArray[splitArray.Length - 1].Trim();
+        }
+        #endregion
     }
+
     #endregion
 
     #region Class MyBatchRequest

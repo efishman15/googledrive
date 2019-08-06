@@ -30,7 +30,7 @@ namespace GoogleDrive
             #region Parse args
 
             string presentationId = null;
-            int startFromIndex = 0;
+            string specificFolderId = null;
             
             var refreshCache = false;
             if (args.Length > 0) {
@@ -48,10 +48,7 @@ namespace GoogleDrive
                 }
                 else
                 {
-                    if (!Int32.TryParse(args[0].Split('=')[1], out startFromIndex))
-                    {
-                        PrintUsageAndExit(3);
-                    }
+                    specificFolderId = args[0].Split('=')[1];
                 }
             }
 
@@ -70,30 +67,40 @@ namespace GoogleDrive
                 #region Process all presentations
 
                 var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
-                if (refreshCache || drive.Presentations.Count == 0)
+
+                if (refreshCache || drive.Cache.Folders.Count == 0)
                 {
                     LogOutput("Building presentations list...");
-                    drive.ClearPresentationsList();
-                    drive.BuildPresentationsList(rootFolderId, true);
-                    drive.SavePresentationsList();
+                    drive.ClearCache();
+                    drive.BuildPresentationsList(rootFolderId, true, null);
+                    drive.BuildFoldersPath(drive.Cache.Folders, string.Empty);
+                    drive.SaveCache();
+
                     LogOutput("Finished building presentations list...");
                 }
-                LogOutput(string.Format("Processing {0} presentations, root folder: {1}", drive.Presentations.Count, drive.GetFolderName(rootFolderId)));
 
-                if (startFromIndex > drive.Presentations.Count-1)
+                CacheFolder rootFolder;
+                if (specificFolderId != null)
                 {
-                    PrintUsageAndExit(4);
+                    rootFolder = drive.Cache.GetFolder(specificFolderId, null);
+                    if (rootFolder == null)
+                    {
+                        //Specified folder id not found in cache
+                        PrintUsageAndExit(3);
+                    }
+                    LogOutput(string.Format("Processing {0} presentations, root folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
+                    drive.ProcessFolderPresentations(rootFolder);
                 }
-                if (startFromIndex > 0)
+                else
                 {
-                    LogOutput(string.Format("Skipping {0} presentations...", startFromIndex));
+                    foreach (var folderKey in drive.Cache.Folders.Keys)
+                    {
+                        LogOutput(string.Format("Processing {0} presentations, root folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
+                        drive.ProcessFolderPresentations(drive.Cache.Folders[folderKey]);
+                    }
                 }
-                for (var i=startFromIndex; i<drive.Presentations.Count; i++)
-                {
-                    drive.ProcessPresentation(drive.Presentations[i]);
 
-                    Console.Write(string.Format("\rProcessed {0} of {1} presentations...", i+1, drive.Presentations.Count));
-                }
+
                 #endregion
             }
             LogOutputWithNewLine("Finished...");
