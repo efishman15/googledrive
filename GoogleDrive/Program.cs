@@ -93,9 +93,10 @@ namespace GoogleDrive
                 }
                 else
                 {
+                    LogOutput(string.Format("Processing {0} presentations", drive.Cache.TotalPresentations));
                     foreach (var folderKey in drive.Cache.Folders.Keys)
                     {
-                        LogOutput(string.Format("Processing {0} presentations, root folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
+                        LogOutput(string.Format("Processing {0} presentations in folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
                         drive.ProcessFolderPresentations(drive.Cache.Folders[folderKey]);
                     }
                 }

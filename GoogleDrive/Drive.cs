@@ -420,11 +420,11 @@ namespace GoogleDrive
             {
                 ProcessPresentation(cachePresentation.PresentationId);
 
-                //Process presentations in all subfolders
-                foreach (var cachedFolderKey in rootFolder.Folders.Keys)
-                {
-                    ProcessFolderPresentations(rootFolder.Folders[cachedFolderKey]);
-                }
+            }
+            //Process presentations in all subfolders
+            foreach (var cachedFolderKey in rootFolder.Folders.Keys)
+            {
+                ProcessFolderPresentations(rootFolder.Folders[cachedFolderKey]);
             }
         }
 
