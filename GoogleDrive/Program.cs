@@ -54,73 +54,76 @@ namespace GoogleDrive
 
             #endregion
 
-            if (presentationId != null)
+            try
             {
-                #region Process specfic presentation
-
-                var cachePresentation = drive.Cache.GetPresentation(presentationId, drive.Cache.Folders);
-                if (cachePresentation != null)
+                if (presentationId != null)
                 {
-                    drive.ProcessPresentation(cachePresentation);
+                    #region Process specfic presentation
+
+                    var cachePresentation = drive.Cache.GetPresentation(presentationId, drive.Cache.Folders);
+                    if (cachePresentation != null)
+                    {
+                        drive.ProcessPresentation(cachePresentation);
+                    }
+                    else
+                    {
+                        LogOutputWithNewLine(string.Format("Presentation {0} not found in cache", presentationId));
+                    }
+
+                    #endregion
                 }
                 else
                 {
-                    LogOutputWithNewLine(string.Format("Presentation {0} not found in cache", presentationId));
-                }
+                    #region Process folder presentations
 
-                #endregion
-            }
-            else
-            {
-                #region Process all presentations
+                    var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
 
-                var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
-
-                if (refreshCache || drive.Cache.Folders.Count == 0)
-                {
-                    LogOutput("Building presentations list...");
-                    drive.ClearCache();
-                    drive.BuildPresentationsList(rootFolderId, true, null);
-                    drive.BuildFoldersPath(drive.Cache.Folders, string.Empty);
-                    drive.SaveCache();
-
-                    LogOutput("Finished building presentations list...");
-                }
-
-                CacheFolder rootFolder;
-                if (specificFolderId != null)
-                {
-                    rootFolder = drive.Cache.GetFolder(specificFolderId, drive.Cache.Folders);
-                    if (rootFolder == null)
+                    if (refreshCache || drive.Cache.Folders.Count == 0)
                     {
-                        //Specified folder id not found in cache
-                        PrintUsageAndExit(3);
+                        LogOutput("Building presentations list...");
+                        drive.ClearCache();
+                        drive.BuildPresentationsList(rootFolderId, true, null);
+                        drive.BuildFoldersPath(drive.Cache.Folders, string.Empty);
+                        drive.SaveCache();
+
+                        LogOutput("Finished building presentations list...");
                     }
-                    LogOutput(string.Format("Processing {0} presentations, root folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
-                    drive.ProcessFolderPresentations(rootFolder);
-                }
-                else
-                {
-                    LogOutput(string.Format("Processing {0} presentations", drive.Cache.TotalPresentations));
-                    foreach (var folderKey in drive.Cache.Folders.Keys)
+
+                    CacheFolder rootFolder;
+                    if (specificFolderId != null)
                     {
-                        LogOutput(string.Format("Processing {0} presentations in folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
-                        drive.ProcessFolderPresentations(drive.Cache.Folders[folderKey]);
+                        rootFolder = drive.Cache.GetFolder(specificFolderId, drive.Cache.Folders);
+                        if (rootFolder == null)
+                        {
+                            //Specified folder id not found in cache
+                            PrintUsageAndExit(3);
+                        }
+                        LogOutput(string.Format("Processing {0} presentations, root folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
+                        drive.ProcessFolderPresentations(rootFolder);
                     }
+                    else
+                    {
+                        LogOutput(string.Format("Processing {0} presentations", drive.Cache.TotalPresentations));
+                        foreach (var folderKey in drive.Cache.Folders.Keys)
+                        {
+                            LogOutput(string.Format("Processing {0} presentations in folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
+                            drive.ProcessFolderPresentations(drive.Cache.Folders[folderKey]);
+                        }
+                    }
+
+
+                    #endregion
                 }
-
-
-                #endregion
             }
-
-            if (drive.SlideErrors.Count > 0)
+            catch(Exception)
             {
-                LogOutput(string.Format("{0} errors found", drive.SlideErrors.Count));
-                foreach (var slideError in drive.SlideErrors)
-                {
-                    LogOutput(string.Format("Presentation: {0} {1}, Slide: {2}, Error: {3}", slideError.PresentationId,  slideError.PresentationName, slideError.SlideId, slideError.Error));
-                }
+
             }
+            finally
+            {
+                LogSlideErrors(drive);
+            }
+
             LogOutputWithNewLine("Finished...");
         }
 
@@ -142,6 +145,18 @@ namespace GoogleDrive
             Console.WriteLine("/PresentationId  Skips succeeded presentations");
             Console.WriteLine("/?               Prints this help");
             Environment.Exit(exitCode);
+        }
+
+        static void LogSlideErrors(Drive drive)
+        {
+            if (drive.SlideErrors.Count > 0)
+            {
+                LogOutput(string.Format("{0} errors found", drive.SlideErrors.Count));
+                foreach (var slideError in drive.SlideErrors)
+                {
+                    LogOutput(string.Format("Presentation: {0} {1}, Slide: {2}, Error: {3}", slideError.PresentationId, slideError.PresentationName, slideError.SlideId, slideError.Error));
+                }
+            }
         }
     }
 }

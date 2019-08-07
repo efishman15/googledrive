@@ -569,289 +569,297 @@ namespace GoogleDrive
         /// <param name="presentationId"></param>
         public void ProcessPresentation(CachePresentation cachePresentation)
         {
-            #region Local variables
-
-            string objectId;
-            int currentStartIndex;
-
-            #endregion
-
-            #region Load Presentation
-
-            var presentationRequest = slidesService.Presentations.Get(cachePresentation.PresentationId);
-            var presentation = presentationRequest.Execute();
-            var myBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
-
-            #endregion
-
-            #region Create Empty Slide (if neccessary)
-
-            if (presentation.Slides[presentation.Slides.Count - 1].PageElements.Count > 2)
+            try
             {
-                //Create empty slide as the last slide
-                var createNewSlideBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
-                createNewSlideBatchRequest.AddCreateSlideRequest(presentation.Slides.Count);
-                createNewSlideBatchRequest.Execute();
+                #region Local variables
 
-                //Read presentation with the newly created slide
-                presentation = presentationRequest.Execute();
-            }
-            else
-            {
-                //Deals with the case that the empty slide contains an unneccessary header/footer text
-                for (var i = 0; i < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; i++)
-                {
-                    myBatchRequest.AddDeleteTextRequest(presentation.Slides[presentation.Slides.Count - 1].PageElements[i].ObjectId, presentation.Slides[presentation.Slides.Count - 1].PageElements[i].Shape);
-                }
-            }
-
-            #endregion
-
-            #region Slides loop - processing all but last slide
-
-            for (var i = 0; i < presentation.Slides.Count - 1; i++)
-            {
-                #region Spearker notes slide
-
-                currentStartIndex = 0;
-                var notesPage = presentation.Slides[i].SlideProperties.NotesPage;
-                if (notesPage.PageElements.Count != 2 ||
-                    notesPage.PageElements[1].Shape == null ||
-                    notesPage.PageElements[1].Shape.Text == null ||
-                    notesPage.PageElements[1].Shape.Text.TextElements == null ||
-                    notesPage.PageElements[1].Shape.Text.TextElements.Count != 9)
-                {
-                    objectId = notesPage.PageElements[1].ObjectId;
-                    myBatchRequest.AddDeleteTextRequest(objectId, notesPage.PageElements[1].Shape);
-
-                    //Add buttons
-                    myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
-                    currentStartIndex += firstSlideText.Length;
-
-                    //Prev
-                    myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length - 1, prevSlidelink, false);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + prevSlideText.Length - 1, currentStartIndex + prevSlideText.Length, null, false);
-                    currentStartIndex += prevSlideText.Length;
-
-                    //Next
-                    myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length - 1, nextSlidelink, false);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + nextSlideText.Length - 1, currentStartIndex + nextSlideText.Length, null, false);
-                    currentStartIndex += nextSlideText.Length;
-
-                    //Last
-                    myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length - 1, lastSlidelink, false);
-                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + lastSlideText.Length - 1, currentStartIndex + lastSlideText.Length, null, false);
-                    currentStartIndex += lastSlideText.Length;
-
-                    myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
-                }
+                string objectId;
+                int currentStartIndex;
 
                 #endregion
 
-                #region Align Image (if single) - and not in place
+                #region Load Presentation
 
-                if (presentation.Slides[i].PageElements.Count == 4)
-                {
-                    //A template slide contains 3 page elements: header text box, footer text box, slide id text box
-                    int mainImageIndex = -1;
-                    for (var k = 0; k < presentation.Slides[i].PageElements.Count; k++)
-                    {
-                        if (presentation.Slides[i].PageElements[k].Image != null)
-                        {
-                            mainImageIndex = k;
-                            break;
-                        }
-                    }
-                    if (mainImageIndex >= 0)
-                    {
-                        myBatchRequest.AddUpdatePageElementTransformRequest(presentation.Slides[i].PageElements[mainImageIndex], alignImage);
-                    }
-                }
+                var presentationRequest = slidesService.Presentations.Get(cachePresentation.PresentationId);
+                var presentation = presentationRequest.Execute();
+                var myBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
 
                 #endregion
 
-                #region Process Text Boxes: Header/Footer/Slide Id
+                #region Create Empty Slide (if neccessary)
 
-                var slideHeaderIndex = -1;
-                var slideFooterIndex = -1;
-                var slidePageIdIndex = -1;
-                var slideHeaderCreated = false;
-                var slideFooterCreated = false;
-                var slidePageIdCreated = false;
-
-                for (var j = 0; j < presentation.Slides[i].PageElements.Count; j++)
+                if (presentation.Slides[presentation.Slides.Count - 1].PageElements.Count > 2)
                 {
-                    if (presentation.Slides[i].PageElements[j].Shape != null &&
-                        presentation.Slides[i].PageElements[j].Shape.ShapeType == "TEXT_BOX")
-                    {
-                        //Found the header object
-                        if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
-                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY)
-                        {
-                            slideHeaderIndex = j;
-                        }
+                    //Create empty slide as the last slide
+                    var createNewSlideBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
+                    createNewSlideBatchRequest.AddCreateSlideRequest(presentation.Slides.Count);
+                    createNewSlideBatchRequest.Execute();
 
-                        //Found the page id object
-                        else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
-                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY)
-                        {
-                            slideFooterIndex = j;
-                        }
-
-                        //Found the page id object
-                        else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
-                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
-                        {
-                            slidePageIdIndex = j;
-                        }
-                    }
-                }
-
-                string desiredPageId = (i + 1).ToString();
-                string desiredFooter = cachePresentation.FooterText + "\n";
-
-                //Header - exclude last 2 slides (homework + toc)
-                if (i < presentation.Slides.Count - 2) 
-                {
-                    if (slideHeaderIndex >= 0)
-                    {
-                        //Header text box exists
-                        if (presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader))
-                        {
-                            SlideErrors.Add(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader));
-                        }
-                    }
-                    else
-                    {
-                        //Create a new text box to hold the slide header
-                        myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideHeaderSize, slideHeaderTransform);
-                        slidePageIdCreated = true;
-                    }
-                }
-
-                //Footer - exclude last 2 slides (homework + toc)
-                if (i < presentation.Slides.Count - 2)
-                {
-                    if (slideFooterIndex >= 0)
-                    {
-                        //Footer text box exists - update only if different
-                        if (presentation.Slides[i].PageElements[slideFooterIndex].Shape.Text.TextElements[1].TextRun.Content != desiredFooter)
-                        {
-                            myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, presentation.Slides[i].PageElements[slideFooterIndex].Shape);
-                            myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, desiredFooter, 0);
-                        }
-                    }
-                    else
-                    {
-                        //Create a new text box to hold the slide footer
-                        myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideFooterSize, slideFooterTransform);
-                        slideFooterCreated = true;
-                    }
-                }
-
-                //Page Id
-                if (slidePageIdIndex >= 0)
-                {
-                    //Page Id text box exists - update only if different
-                    if (presentation.Slides[i].PageElements[slidePageIdIndex].Shape.Text.TextElements[1].TextRun.Content != desiredPageId)
-                    {
-                        myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
-                        myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, desiredPageId, 0);
-                    }
+                    //Read presentation with the newly created slide
+                    presentation = presentationRequest.Execute();
                 }
                 else
                 {
-                    //Create a new text box to hold the slide number
-                    myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slidePageIdSize, slidePageIdTransform);
-                    slidePageIdCreated = true;
-                }
-
-                var batchResponse = myBatchRequest.Execute();
-                myBatchRequest.ClearRequests();
-
-                var addTextBoxesBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
-                var textBoxesAdded = false;
-                for (var k = 0; k < batchResponse.Replies.Count; k++)
-                {
-                    if (batchResponse.Replies[k].CreateShape != null)
+                    //Deals with the case that the empty slide contains an unneccessary header/footer text
+                    for (var i = 0; i < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; i++)
                     {
-                        if (slideHeaderCreated)
-                        {
-                            addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, "", 0);
-                            addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideHeaderTextBoxTextStyle", slideHeaderTextBoxTextStyleFields, 0, 0, null);
-                            addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
-                            slideHeaderCreated = false;
-                            textBoxesAdded = true;
-                        }
-                        if (slideFooterCreated)
-                        {
-                            addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredFooter, 0);
-                            addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideFooterTextBoxTextStyle", slideFooterTextBoxTextStyleFields, 0, desiredFooter.Length, null);
-                            addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
-                            slideFooterCreated = false;
-                            textBoxesAdded = true;
-                        }
-                        if (slidePageIdCreated)
-                        {
-                            addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredPageId, 0);
-                            addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields, 0, desiredPageId.Length, null);
-                            addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
-                            slidePageIdCreated = false;
-                            textBoxesAdded = true;
-                        }
+                        myBatchRequest.AddDeleteTextRequest(presentation.Slides[presentation.Slides.Count - 1].PageElements[i].ObjectId, presentation.Slides[presentation.Slides.Count - 1].PageElements[i].Shape);
                     }
-                }
-                if (textBoxesAdded)
-                {
-                    //Execute the requests to edit the text boxes created
-                    addTextBoxesBatchRequest.Execute();
                 }
 
                 #endregion
-            }
 
-            #endregion
+                #region Slides loop - processing all but last slide
 
-            #region Process Last Slide (TOC)
-
-            var createTOCBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
-            var lastSlideNotesPage = presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage;
-
-            //Check if the last slide contains the TOC
-            //Number f text elements should be 2n+1 where n=number of slides (excluding the last) and extra element for the paragraph style
-            if (lastSlideNotesPage.PageElements.Count != 2 ||
-                lastSlideNotesPage.PageElements[1].Shape == null ||
-                lastSlideNotesPage.PageElements[1].Shape.Text == null ||
-                lastSlideNotesPage.PageElements[1].Shape.Text.TextElements == null ||
-                lastSlideNotesPage.PageElements[1].Shape.Text.TextElements.Count != 2 * (presentation.Slides.Count - 1) + 1)
-            {
-                objectId = presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].ObjectId;
-
-                createTOCBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].Shape);
-
-                currentStartIndex = 0;
-                string currentPageIdString;
-                for (var i = 1; i <= presentation.Slides.Count - 1; i++)
+                for (var i = 0; i < presentation.Slides.Count - 1; i++)
                 {
-                    var link = new Link()
+                    #region Spearker notes slide
+
+                    currentStartIndex = 0;
+                    var notesPage = presentation.Slides[i].SlideProperties.NotesPage;
+                    if (notesPage.PageElements.Count != 2 ||
+                        notesPage.PageElements[1].Shape == null ||
+                        notesPage.PageElements[1].Shape.Text == null ||
+                        notesPage.PageElements[1].Shape.Text.TextElements == null ||
+                        notesPage.PageElements[1].Shape.Text.TextElements.Count != 9)
                     {
-                        SlideIndex = i - 1
-                    };
-                    currentPageIdString = (i).ToString("00") + "\t";
-                    createTOCBatchRequest.AddInsertTextRequest(objectId, currentPageIdString, currentStartIndex);
-                    //Link - will not contain the tab ("\t")
-                    createTOCBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + currentPageIdString.Length - 1, link);
-                    currentStartIndex += currentPageIdString.Length;
+                        objectId = notesPage.PageElements[1].ObjectId;
+                        myBatchRequest.AddDeleteTextRequest(objectId, notesPage.PageElements[1].Shape);
+
+                        //Add buttons
+                        myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
+                        currentStartIndex += firstSlideText.Length;
+
+                        //Prev
+                        myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length - 1, prevSlidelink, false);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + prevSlideText.Length - 1, currentStartIndex + prevSlideText.Length, null, false);
+                        currentStartIndex += prevSlideText.Length;
+
+                        //Next
+                        myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length - 1, nextSlidelink, false);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + nextSlideText.Length - 1, currentStartIndex + nextSlideText.Length, null, false);
+                        currentStartIndex += nextSlideText.Length;
+
+                        //Last
+                        myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length - 1, lastSlidelink, false);
+                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + lastSlideText.Length - 1, currentStartIndex + lastSlideText.Length, null, false);
+                        currentStartIndex += lastSlideText.Length;
+
+                        myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
+                    }
+
+                    #endregion
+
+                    #region Align Image (if single) - and not in place
+
+                    if (presentation.Slides[i].PageElements.Count == 4)
+                    {
+                        //A template slide contains 3 page elements: header text box, footer text box, slide id text box
+                        int mainImageIndex = -1;
+                        for (var k = 0; k < presentation.Slides[i].PageElements.Count; k++)
+                        {
+                            if (presentation.Slides[i].PageElements[k].Image != null)
+                            {
+                                mainImageIndex = k;
+                                break;
+                            }
+                        }
+                        if (mainImageIndex >= 0)
+                        {
+                            myBatchRequest.AddUpdatePageElementTransformRequest(presentation.Slides[i].PageElements[mainImageIndex], alignImage);
+                        }
+                    }
+
+                    #endregion
+
+                    #region Process Text Boxes: Header/Footer/Slide Id
+
+                    var slideHeaderIndex = -1;
+                    var slideFooterIndex = -1;
+                    var slidePageIdIndex = -1;
+                    var slideHeaderCreated = false;
+                    var slideFooterCreated = false;
+                    var slidePageIdCreated = false;
+
+                    for (var j = 0; j < presentation.Slides[i].PageElements.Count; j++)
+                    {
+                        if (presentation.Slides[i].PageElements[j].Shape != null &&
+                            presentation.Slides[i].PageElements[j].Shape.ShapeType == "TEXT_BOX")
+                        {
+                            //Found the header object
+                            if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
+                            presentation.Slides[i].PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY)
+                            {
+                                slideHeaderIndex = j;
+                            }
+
+                            //Found the page id object
+                            else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
+                            presentation.Slides[i].PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY)
+                            {
+                                slideFooterIndex = j;
+                            }
+
+                            //Found the page id object
+                            else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
+                            presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
+                            {
+                                slidePageIdIndex = j;
+                            }
+                        }
+                    }
+
+                    string desiredPageId = (i + 1).ToString();
+                    string desiredFooter = cachePresentation.FooterText + "\n";
+
+                    //Header - exclude last 2 slides (homework + toc)
+                    if (i < presentation.Slides.Count - 2)
+                    {
+                        if (slideHeaderIndex >= 0)
+                        {
+                            //Header text box exists
+                            if (presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader))
+                            {
+                                SlideErrors.Add(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader));
+                            }
+                        }
+                        else
+                        {
+                            //Create a new text box to hold the slide header
+                            myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideHeaderSize, slideHeaderTransform);
+                            slidePageIdCreated = true;
+                        }
+                    }
+
+                    //Footer - exclude last 2 slides (homework + toc)
+                    if (i < presentation.Slides.Count - 2)
+                    {
+                        if (slideFooterIndex >= 0)
+                        {
+                            //Footer text box exists - update only if different
+                            if (presentation.Slides[i].PageElements[slideFooterIndex].Shape.Text.TextElements[1].TextRun.Content != desiredFooter)
+                            {
+                                myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, presentation.Slides[i].PageElements[slideFooterIndex].Shape);
+                                myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, desiredFooter, 0);
+                            }
+                        }
+                        else
+                        {
+                            //Create a new text box to hold the slide footer
+                            myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideFooterSize, slideFooterTransform);
+                            slideFooterCreated = true;
+                        }
+                    }
+
+                    //Page Id
+                    if (slidePageIdIndex >= 0)
+                    {
+                        //Page Id text box exists - update only if different
+                        if (presentation.Slides[i].PageElements[slidePageIdIndex].Shape.Text.TextElements[1].TextRun.Content != desiredPageId)
+                        {
+                            myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
+                            myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, desiredPageId, 0);
+                        }
+                    }
+                    else
+                    {
+                        //Create a new text box to hold the slide number
+                        myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slidePageIdSize, slidePageIdTransform);
+                        slidePageIdCreated = true;
+                    }
+
+                    var batchResponse = myBatchRequest.Execute();
+                    myBatchRequest.ClearRequests();
+
+                    var addTextBoxesBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
+                    var textBoxesAdded = false;
+                    for (var k = 0; k < batchResponse.Replies.Count; k++)
+                    {
+                        if (batchResponse.Replies[k].CreateShape != null)
+                        {
+                            if (slideHeaderCreated)
+                            {
+                                addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, "", 0);
+                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideHeaderTextBoxTextStyle", slideHeaderTextBoxTextStyleFields, 0, 0, null);
+                                addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                                slideHeaderCreated = false;
+                                textBoxesAdded = true;
+                            }
+                            if (slideFooterCreated)
+                            {
+                                addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredFooter, 0);
+                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideFooterTextBoxTextStyle", slideFooterTextBoxTextStyleFields, 0, desiredFooter.Length, null);
+                                addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                                slideFooterCreated = false;
+                                textBoxesAdded = true;
+                            }
+                            if (slidePageIdCreated)
+                            {
+                                addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredPageId, 0);
+                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields, 0, desiredPageId.Length, null);
+                                addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                                slidePageIdCreated = false;
+                                textBoxesAdded = true;
+                            }
+                        }
+                    }
+                    if (textBoxesAdded)
+                    {
+                        //Execute the requests to edit the text boxes created
+                        addTextBoxesBatchRequest.Execute();
+                    }
+
+                    #endregion
                 }
-                createTOCBatchRequest.AddUpdateParagraphStyleRequest(objectId, true);
-                createTOCBatchRequest.Execute();
+
+                #endregion
+
+                #region Process Last Slide (TOC)
+
+                var createTOCBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
+                var lastSlideNotesPage = presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage;
+
+                //Check if the last slide contains the TOC
+                //Number f text elements should be 2n+1 where n=number of slides (excluding the last) and extra element for the paragraph style
+                if (lastSlideNotesPage.PageElements.Count != 2 ||
+                    lastSlideNotesPage.PageElements[1].Shape == null ||
+                    lastSlideNotesPage.PageElements[1].Shape.Text == null ||
+                    lastSlideNotesPage.PageElements[1].Shape.Text.TextElements == null ||
+                    lastSlideNotesPage.PageElements[1].Shape.Text.TextElements.Count != 2 * (presentation.Slides.Count - 1) + 1)
+                {
+                    objectId = presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].ObjectId;
+
+                    createTOCBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].Shape);
+
+                    currentStartIndex = 0;
+                    string currentPageIdString;
+                    for (var i = 1; i <= presentation.Slides.Count - 1; i++)
+                    {
+                        var link = new Link()
+                        {
+                            SlideIndex = i - 1
+                        };
+                        currentPageIdString = (i).ToString("00") + "\t";
+                        createTOCBatchRequest.AddInsertTextRequest(objectId, currentPageIdString, currentStartIndex);
+                        //Link - will not contain the tab ("\t")
+                        createTOCBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + currentPageIdString.Length - 1, link);
+                        currentStartIndex += currentPageIdString.Length;
+                    }
+                    createTOCBatchRequest.AddUpdateParagraphStyleRequest(objectId, true);
+                    createTOCBatchRequest.Execute();
+                }
+                #endregion
             }
-            #endregion
+            catch(Exception e)
+            {
+                SlideErrors.Add(new SlideError(cachePresentation.PresentationId, cachePresentation.PresentationName, 0, e.StackTrace));
+                throw (e);
+            }
         }
 
         #endregion
