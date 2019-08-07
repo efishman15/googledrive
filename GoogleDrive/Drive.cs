@@ -33,6 +33,7 @@ namespace GoogleDrive
 
         public string PresentationId { get; private set; }
         public string PresentationName { get; private set; }
+        public string FooterText { get; set; }
 
         #endregion
 
@@ -40,7 +41,7 @@ namespace GoogleDrive
         public CachePresentation(string presentationId, string presentationName)
         {
             PresentationId = presentationId;
-            PresentationName = PresentationName;
+            PresentationName = presentationName;
         }
         #endregion
     }
@@ -128,7 +129,7 @@ namespace GoogleDrive
                 TotalPresentations++;
 
                 //Bubble counter up
-                var currentFolder = GetFolder(parentFolder.ParentFolderId,Folders);
+                var currentFolder = GetFolder(parentFolder.ParentFolderId, Folders);
                 while (currentFolder != null)
                 {
                     currentFolder.TotalPresentations++;
@@ -172,8 +173,62 @@ namespace GoogleDrive
             return null;
         }
 
+        /// <summary>
+        /// Get a presentation in the tree by its presentation id (recurssive)
+        /// </summary>
+        /// <param name="presentationId"></param>
+        /// <param name="folders"></param>
+        /// <returns></returns>
+        public CachePresentation GetPresentation(string presentationId, Dictionary<string, CacheFolder> folders)
+        {
+            foreach (var folderKey in folders.Keys)
+            {
+                foreach (var presentation in folders[folderKey].Presentations)
+                {
+                    if (presentation.PresentationId == presentationId)
+                    {
+                        return presentation;
+                    }
+                }
+
+                var presentationInSubFolders = GetPresentation(presentationId, folders[folderKey].Folders);
+                if (presentationInSubFolders != null)
+                {
+                    return presentationInSubFolders;
+                }
+            }
+
+            return null;
+        }
+
         #endregion
     }
+    #endregion
+
+    #region Class Slide Error
+
+    public class SlideError
+    {
+        #region Properties
+
+        public string PresentationId { get; private set; }
+        public string PresentationName { get; private set; }
+        public int SlideId { get; private set; }
+        public string Error { get; private set; }
+
+        #endregion
+
+        #region C'Tor/Dtor
+        public SlideError(string presentationId, string presentationName, int slideId, string error)
+        {
+            PresentationId = presentationId;
+            PresentationName = presentationName;
+            SlideId = slideId;
+            Error = error;
+        }
+        #endregion
+    }
+
     #endregion
 
     #region Class Drive
@@ -191,6 +246,35 @@ namespace GoogleDrive
         private readonly int pathStartLevel;
         private readonly string pathSeparator;
         private readonly string folderNameSeparator;
+
+        private readonly Link lastSlidelink;
+        private readonly Link nextSlidelink;
+        private readonly Link prevSlidelink;
+        private readonly Link firstSlidelink;
+
+        private readonly string firstSlideText;
+        private readonly string prevSlideText;
+        private readonly string nextSlideText;
+        private readonly string lastSlideText;
+
+        private readonly string speakerNotesTextStyleFields;
+
+        private readonly string slideHeaderTextBoxTextStyleFields;
+        private readonly string slideFooterTextBoxTextStyleFields;
+        private readonly string slideIdTextBoxTextStyleFields;
+
+        private readonly Size slidePageIdSize;
+        private readonly AffineTransform slidePageIdTransform;
+
+        private readonly Size slideHeaderSize;
+        private readonly AffineTransform slideHeaderTransform;
+
+        private readonly Size slideFooterSize;
+        private readonly AffineTransform slideFooterTransform;
+
+        private readonly AlignImage alignImage;
+
+        private readonly string lookForTextInHeader;
 
         #endregion
 
@@ -248,6 +332,41 @@ namespace GoogleDrive
             pathSeparator = ConfigurationManager.AppSettings["PathSeparator"];
             folderNameSeparator = ConfigurationManager.AppSettings["FolderNameSeparator"];
 
+            SlideErrors = new List<SlideError>();
+
+            #endregion
+
+            #region Load Config Variables
+
+            lastSlidelink = new Link() { RelativeLink = "LAST_SLIDE" };
+            nextSlidelink = new Link() { RelativeLink = "NEXT_SLIDE" };
+            prevSlidelink = new Link() { RelativeLink = "PREVIOUS_SLIDE" };
+            firstSlidelink = new Link() { RelativeLink = "FIRST_SLIDE" };
+
+            firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
+            prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
+            nextSlideText = ConfigurationManager.AppSettings["NextSlideText"] + "\t";
+            lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
+
+            speakerNotesTextStyleFields = ConfigurationManager.AppSettings["SpeakerNotestTextStyleFields"];
+
+            slideHeaderTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideHeaderTextBoxTextStyleFields"];
+            slideFooterTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideFooterTextBoxTextStyleFields"];
+            slideIdTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideIdTextBoxTextStyleFields"];
+
+            slidePageIdSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlidePageIdSize"]);
+            slidePageIdTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlidePageIdTransform"]);
+
+            slideHeaderSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlideHeaderSize"]);
+            slideHeaderTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlideHeaderTransform"]);
+
+            slideFooterSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlideFooterSize"]);
+            slideFooterTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlideFooterTransform"]);
+
+            alignImage = (AlignImage)Enum.Parse(typeof(AlignImage), ConfigurationManager.AppSettings["ImageAlign"]);
+
+            lookForTextInHeader = ConfigurationManager.AppSettings["LookForTextInHeader"];
+
             #endregion
 
         }
@@ -260,6 +379,11 @@ namespace GoogleDrive
         /// </summary>
         public Cache Cache { get; private set; }
 
+        /// <summary>
+        /// Returns a list of errors found in slides
+        /// </summary>
+        public List<SlideError> SlideErrors { get; private set; }
+
         #endregion
 
         #region Methods
@@ -269,7 +393,7 @@ namespace GoogleDrive
         /// </summary>
         public void ClearCache()
         {
-           Cache = new Cache();
+            Cache = new Cache();
         }
 
         /// <summary>
@@ -305,7 +429,7 @@ namespace GoogleDrive
                     }
                     foldersFilter += "'" + folder.Id + "' in parents";
 
-                    var newFolder = new CacheFolder(folder.Id, GetFolderName(folder.Id),parentFolder?.FolderId);
+                    var newFolder = new CacheFolder(folder.Id, GetFolderName(folder.Id), parentFolder?.FolderId);
                     if (parentFolder == null)
                     {
                         newFolder.Level = 1;
@@ -326,7 +450,7 @@ namespace GoogleDrive
             {
                 if (foldersFilter == string.Empty)
                 {
-                   //No folders in root folder - just files
+                    //No folders in root folder - just files
                     foldersFilter = "('" + rootFolderId + "' in parents) ";
                 }
                 else
@@ -342,7 +466,7 @@ namespace GoogleDrive
                     filesRequest.Fields = "nextPageToken, files(id, name, parents)";
                     filesRequest.PageToken = pageToken;
                     var fileResult = filesRequest.Execute();
-                    
+
                     foreach (var file in fileResult.Files)
                     {
                         //If file is filed in more than 1 folder, add it only under the first folder
@@ -360,7 +484,7 @@ namespace GoogleDrive
         /// </summary>
         public void BuildFoldersPath(Dictionary<string, CacheFolder> root, string parentPath)
         {
-            foreach(var folderKey in root.Keys)
+            foreach (var folderKey in root.Keys)
             {
                 if (root[folderKey].Level >= pathStartLevel)
                 {
@@ -371,6 +495,10 @@ namespace GoogleDrive
                     else
                     {
                         root[folderKey].Path = parentPath + pathSeparator + NormalizeFolderName(root[folderKey].FolderName);
+                    }
+                    foreach(var presentation in root[folderKey].Presentations)
+                    {
+                        presentation.FooterText = root[folderKey].Path;
                     }
                 }
                 BuildFoldersPath(root[folderKey].Folders, root[folderKey].Path);
@@ -416,9 +544,9 @@ namespace GoogleDrive
         /// <param name="rootFolder"></param>
         public void ProcessFolderPresentations(CacheFolder rootFolder)
         {
-            foreach(var cachePresentation in rootFolder.Presentations)
+            foreach (var cachePresentation in rootFolder.Presentations)
             {
-                ProcessPresentation(cachePresentation.PresentationId);
+                ProcessPresentation(cachePresentation);
 
             }
             //Process presentations in all subfolders
@@ -439,47 +567,29 @@ namespace GoogleDrive
         /// 3) For the last slide: add "TOC": a link to each slide (except this last slide)
         /// </summary>
         /// <param name="presentationId"></param>
-        public void ProcessPresentation(string presentationId)
+        public void ProcessPresentation(CachePresentation cachePresentation)
         {
-            #region Load variables
+            #region Local variables
 
             string objectId;
             int currentStartIndex;
 
-            var lastSlidelink = new Link() { RelativeLink = "LAST_SLIDE" };
-            var nextSlidelink = new Link() { RelativeLink = "NEXT_SLIDE" };
-            var prevSlidelink = new Link() { RelativeLink = "PREVIOUS_SLIDE" };
-            var firstSlidelink = new Link() { RelativeLink = "FIRST_SLIDE" };
-
-            var firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
-            var prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
-            var nextSlideText = ConfigurationManager.AppSettings["NextSlideText"] + "\t";
-            var lastSlideText = ConfigurationManager.AppSettings["LastSlideText"] + "\t";
-
-            var speakerNotesTextStyleFields = ConfigurationManager.AppSettings["SpeakerNotestTextStyleFields"];
-            var slideIdTextBoxTextStyleFields = ConfigurationManager.AppSettings["SlideIdTextBoxTextStyleFields"];
-
-            var slidePageIdSize = JsonConvert.DeserializeObject<Size>(ConfigurationManager.AppSettings["SlidePageIdSize"]);
-            var slidePageIdTransform = JsonConvert.DeserializeObject<AffineTransform>(ConfigurationManager.AppSettings["SlidePageIdTransform"]);
-
-            var alignImage = (AlignImage)Enum.Parse(typeof(AlignImage), ConfigurationManager.AppSettings["ImageAlign"]);
-
             #endregion
 
             #region Load Presentation
-            
-            var presentationRequest = slidesService.Presentations.Get(presentationId);
+
+            var presentationRequest = slidesService.Presentations.Get(cachePresentation.PresentationId);
             var presentation = presentationRequest.Execute();
-            var myBatchRequest = new MyBatchRequest(slidesService, presentationId);
+            var myBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
 
             #endregion
 
             #region Create Empty Slide (if neccessary)
 
-            if (presentation.Slides[presentation.Slides.Count-1].PageElements.Count > 2)
+            if (presentation.Slides[presentation.Slides.Count - 1].PageElements.Count > 2)
             {
                 //Create empty slide as the last slide
-                var createNewSlideBatchRequest = new MyBatchRequest(slidesService, presentationId);
+                var createNewSlideBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
                 createNewSlideBatchRequest.AddCreateSlideRequest(presentation.Slides.Count);
                 createNewSlideBatchRequest.Execute();
 
@@ -489,7 +599,7 @@ namespace GoogleDrive
             else
             {
                 //Deals with the case that the empty slide contains an unneccessary header/footer text
-                for (var i=0; i < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; i++)
+                for (var i = 0; i < presentation.Slides[presentation.Slides.Count - 1].PageElements.Count; i++)
                 {
                     myBatchRequest.AddDeleteTextRequest(presentation.Slides[presentation.Slides.Count - 1].PageElements[i].ObjectId, presentation.Slides[presentation.Slides.Count - 1].PageElements[i].Shape);
                 }
@@ -499,46 +609,51 @@ namespace GoogleDrive
 
             #region Slides loop - processing all but last slide
 
-            for (var i=0; i<presentation.Slides.Count-1; i++)
+            for (var i = 0; i < presentation.Slides.Count - 1; i++)
             {
-                #region Delete existing spearker notes from slide
+                #region Spearker notes slide
 
                 currentStartIndex = 0;
-                objectId = presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].ObjectId;
-                myBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[i].SlideProperties.NotesPage.PageElements[1].Shape);
+                var notesPage = presentation.Slides[i].SlideProperties.NotesPage;
+                if (notesPage.PageElements.Count != 2 ||
+                    notesPage.PageElements[1].Shape == null ||
+                    notesPage.PageElements[1].Shape.Text == null ||
+                    notesPage.PageElements[1].Shape.Text.TextElements == null ||
+                    notesPage.PageElements[1].Shape.Text.TextElements.Count != 9)
+                {
+                    objectId = notesPage.PageElements[1].ObjectId;
+                    myBatchRequest.AddDeleteTextRequest(objectId, notesPage.PageElements[1].Shape);
+
+                    //Add buttons
+                    myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
+                    currentStartIndex += firstSlideText.Length;
+
+                    //Prev
+                    myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length - 1, prevSlidelink, false);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + prevSlideText.Length - 1, currentStartIndex + prevSlideText.Length, null, false);
+                    currentStartIndex += prevSlideText.Length;
+
+                    //Next
+                    myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length - 1, nextSlidelink, false);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + nextSlideText.Length - 1, currentStartIndex + nextSlideText.Length, null, false);
+                    currentStartIndex += nextSlideText.Length;
+
+                    //Last
+                    myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length - 1, lastSlidelink, false);
+                    myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + lastSlideText.Length - 1, currentStartIndex + lastSlideText.Length, null, false);
+                    currentStartIndex += lastSlideText.Length;
+
+                    myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
+                }
 
                 #endregion
 
-                #region Add First/Prev/Next/Last buttons
-
-                myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
-                currentStartIndex += firstSlideText.Length;
-
-                //Prev
-                myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length - 1, prevSlidelink, false);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + prevSlideText.Length - 1, currentStartIndex + prevSlideText.Length, null, false);
-                currentStartIndex += prevSlideText.Length;
-
-                //Next
-                myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length - 1, nextSlidelink, false);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + nextSlideText.Length - 1, currentStartIndex + nextSlideText.Length, null, false);
-                currentStartIndex += nextSlideText.Length;
-
-                //Last
-                myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length - 1, lastSlidelink, false);
-                myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + lastSlideText.Length - 1, currentStartIndex + lastSlideText.Length, null, false);
-                currentStartIndex += lastSlideText.Length;
-
-                myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
-
-                #endregion
-
-                #region Align Image
+                #region Align Image (if single) - and not in place
 
                 if (presentation.Slides[i].PageElements.Count == 4)
                 {
@@ -560,45 +675,141 @@ namespace GoogleDrive
 
                 #endregion
 
-                #region Slide Id Text Box
+                #region Process Text Boxes: Header/Footer/Slide Id
 
+                var slideHeaderIndex = -1;
+                var slideFooterIndex = -1;
                 var slidePageIdIndex = -1;
-                for (var j=0; j<presentation.Slides[i].PageElements.Count; j++)
+                var slideHeaderCreated = false;
+                var slideFooterCreated = false;
+                var slidePageIdCreated = false;
+
+                for (var j = 0; j < presentation.Slides[i].PageElements.Count; j++)
                 {
-                    if (presentation.Slides[i].PageElements[j].Shape != null && 
-                        presentation.Slides[i].PageElements[j].Shape.ShapeType == "TEXT_BOX" &&
-                        presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
-                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
+                    if (presentation.Slides[i].PageElements[j].Shape != null &&
+                        presentation.Slides[i].PageElements[j].Shape.ShapeType == "TEXT_BOX")
                     {
-                        slidePageIdIndex = j;
-                        break;
+                        //Found the header object
+                        if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
+                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY)
+                        {
+                            slideHeaderIndex = j;
+                        }
+
+                        //Found the page id object
+                        else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
+                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY)
+                        {
+                            slideFooterIndex = j;
+                        }
+
+                        //Found the page id object
+                        else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
+                        presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
+                        {
+                            slidePageIdIndex = j;
+                        }
                     }
                 }
 
+                string desiredPageId = (i + 1).ToString();
+                string desiredFooter = cachePresentation.FooterText + "\n";
+
+                //Header - exclude last 2 slides (homework + toc)
+                if (i < presentation.Slides.Count - 2) 
+                {
+                    if (slideHeaderIndex >= 0)
+                    {
+                        //Header text box exists
+                        if (presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader))
+                        {
+                            SlideErrors.Add(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader));
+                        }
+                    }
+                    else
+                    {
+                        //Create a new text box to hold the slide header
+                        myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideHeaderSize, slideHeaderTransform);
+                        slidePageIdCreated = true;
+                    }
+                }
+
+                //Footer - exclude last 2 slides (homework + toc)
+                if (i < presentation.Slides.Count - 2)
+                {
+                    if (slideFooterIndex >= 0)
+                    {
+                        //Footer text box exists - update only if different
+                        if (presentation.Slides[i].PageElements[slideFooterIndex].Shape.Text.TextElements[1].TextRun.Content != desiredFooter)
+                        {
+                            myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, presentation.Slides[i].PageElements[slideFooterIndex].Shape);
+                            myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, desiredFooter, 0);
+                        }
+                    }
+                    else
+                    {
+                        //Create a new text box to hold the slide footer
+                        myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideFooterSize, slideFooterTransform);
+                        slideFooterCreated = true;
+                    }
+                }
+
+                //Page Id
                 if (slidePageIdIndex >= 0)
                 {
-                    //Page Id text box exists
-                    myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
-                    myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, (i+1).ToString(),0);
+                    //Page Id text box exists - update only if different
+                    if (presentation.Slides[i].PageElements[slidePageIdIndex].Shape.Text.TextElements[1].TextRun.Content != desiredPageId)
+                    {
+                        myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
+                        myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, desiredPageId, 0);
+                    }
                 }
                 else
                 {
                     //Create a new text box to hold the slide number
                     myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slidePageIdSize, slidePageIdTransform);
+                    slidePageIdCreated = true;
                 }
 
                 var batchResponse = myBatchRequest.Execute();
                 myBatchRequest.ClearRequests();
 
-                if (batchResponse.Replies[batchResponse.Replies.Count-1].CreateShape != null)
+                var addTextBoxesBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
+                var textBoxesAdded = false;
+                for (var k = 0; k < batchResponse.Replies.Count; k++)
                 {
-                    //Read presentation with the newly created text box for the slide id
-                    //presentation = presentationRequest.Execute();
-                    var addSlideIdTextBatchRequest = new MyBatchRequest(slidesService, presentationId);
-                    addSlideIdTextBatchRequest.AddInsertTextRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, (i + 1).ToString(), 0);
-                    addSlideIdTextBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields,  0, (i + 1).ToString().Length, null);
-                    addSlideIdTextBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[batchResponse.Replies.Count - 1].CreateShape.ObjectId, false);
-                    addSlideIdTextBatchRequest.Execute();
+                    if (batchResponse.Replies[k].CreateShape != null)
+                    {
+                        if (slideHeaderCreated)
+                        {
+                            addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, "", 0);
+                            addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideHeaderTextBoxTextStyle", slideHeaderTextBoxTextStyleFields, 0, 0, null);
+                            addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                            slideHeaderCreated = false;
+                            textBoxesAdded = true;
+                        }
+                        if (slideFooterCreated)
+                        {
+                            addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredFooter, 0);
+                            addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideFooterTextBoxTextStyle", slideFooterTextBoxTextStyleFields, 0, desiredFooter.Length, null);
+                            addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                            slideFooterCreated = false;
+                            textBoxesAdded = true;
+                        }
+                        if (slidePageIdCreated)
+                        {
+                            addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredPageId, 0);
+                            addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields, 0, desiredPageId.Length, null);
+                            addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                            slidePageIdCreated = false;
+                            textBoxesAdded = true;
+                        }
+                    }
+                }
+                if (textBoxesAdded)
+                {
+                    //Execute the requests to edit the text boxes created
+                    addTextBoxesBatchRequest.Execute();
                 }
 
                 #endregion
@@ -608,35 +819,45 @@ namespace GoogleDrive
 
             #region Process Last Slide (TOC)
 
-            var createTOCBatchRequest = new MyBatchRequest(slidesService, presentationId);
-            objectId = presentation.Slides[presentation.Slides.Count-1].SlideProperties.NotesPage.PageElements[1].ObjectId;
+            var createTOCBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
+            var lastSlideNotesPage = presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage;
 
-            createTOCBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].Shape);
-
-            currentStartIndex = 0;
-            string currentPageIdString;
-            for(var i=1; i<=presentation.Slides.Count-1; i++)
+            //Check if the last slide contains the TOC
+            //Number f text elements should be 2n+1 where n=number of slides (excluding the last) and extra element for the paragraph style
+            if (lastSlideNotesPage.PageElements.Count != 2 ||
+                lastSlideNotesPage.PageElements[1].Shape == null ||
+                lastSlideNotesPage.PageElements[1].Shape.Text == null ||
+                lastSlideNotesPage.PageElements[1].Shape.Text.TextElements == null ||
+                lastSlideNotesPage.PageElements[1].Shape.Text.TextElements.Count != 2 * (presentation.Slides.Count - 1) + 1)
             {
-                var link = new Link()
-                {
-                    SlideIndex = i-1
-                };
-                currentPageIdString = (i).ToString("00") + "\t";
-                createTOCBatchRequest.AddInsertTextRequest(objectId, currentPageIdString, currentStartIndex);
-                //Link - will not contain the tab ("\t")
-                createTOCBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + currentPageIdString.Length - 1, link);
-                currentStartIndex += currentPageIdString.Length;
-            }
-            createTOCBatchRequest.AddUpdateParagraphStyleRequest(objectId, true);
-            createTOCBatchRequest.Execute();
+                objectId = presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].ObjectId;
 
+                createTOCBatchRequest.AddDeleteTextRequest(objectId, presentation.Slides[presentation.Slides.Count - 1].SlideProperties.NotesPage.PageElements[1].Shape);
+
+                currentStartIndex = 0;
+                string currentPageIdString;
+                for (var i = 1; i <= presentation.Slides.Count - 1; i++)
+                {
+                    var link = new Link()
+                    {
+                        SlideIndex = i - 1
+                    };
+                    currentPageIdString = (i).ToString("00") + "\t";
+                    createTOCBatchRequest.AddInsertTextRequest(objectId, currentPageIdString, currentStartIndex);
+                    //Link - will not contain the tab ("\t")
+                    createTOCBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + currentPageIdString.Length - 1, link);
+                    currentStartIndex += currentPageIdString.Length;
+                }
+                createTOCBatchRequest.AddUpdateParagraphStyleRequest(objectId, true);
+                createTOCBatchRequest.Execute();
+            }
             #endregion
         }
 
         #endregion
 
         #region Private Methods
-        
+
         /// <summary>
         /// Returns a normalized folder name - everything AFTER the folderNameSeparator in config (usually ".")
         /// </summary>
@@ -652,6 +873,7 @@ namespace GoogleDrive
             var splitArray = folderName.Split(folderNameSeparator.ToCharArray());
             return splitArray[splitArray.Length - 1].Trim();
         }
+
         #endregion
     }
 
@@ -800,7 +1022,7 @@ namespace GoogleDrive
             {
                 UpdateParagraphStyle = new UpdateParagraphStyleRequest()
                 {
-                    
+
                     ObjectId = objectId,
                     Style = paragraphStyle,
                     TextRange = new Range()
@@ -939,8 +1161,7 @@ namespace GoogleDrive
         }
         #endregion
     }
-    
+
     #endregion
+        
 }
-
-

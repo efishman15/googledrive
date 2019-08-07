@@ -15,7 +15,7 @@ namespace GoogleDrive
                 {
                     PrintUsageAndExit(1);
                 }
-                else if (args[0] != "/RefreshList" && (!args[0].StartsWith("/Id=") || args[0].Length<5) && (!args[0].StartsWith("/StartFrom=") || args[0].Length < 12))
+                else if (args[0] != "/RefreshList" && (!args[0].StartsWith("/RootFolderId=") || args[0].Length<15) && (!args[0].StartsWith("/PresentationId=") || args[0].Length < 17))
                 {
                     PrintUsageAndExit(2);
                 }
@@ -38,17 +38,17 @@ namespace GoogleDrive
                 {
                     PrintUsageAndExit(0);
                 }
-                if (args[0].StartsWith("/Id="))
+                if (args[0].StartsWith("/RootFolderId="))
+                {
+                    specificFolderId = args[0].Split('=')[1];
+                }
+                if (args[0].StartsWith("/PresentationId="))
                 {
                     presentationId = args[0].Split('=')[1];
                 }
                 else if (args[0] == "/RefreshList")
                 {
                     refreshCache = true;
-                }
-                else
-                {
-                    specificFolderId = args[0].Split('=')[1];
                 }
             }
 
@@ -58,7 +58,15 @@ namespace GoogleDrive
             {
                 #region Process specfic presentation
 
-                drive.ProcessPresentation(presentationId);
+                var cachePresentation = drive.Cache.GetPresentation(presentationId, drive.Cache.Folders);
+                if (cachePresentation != null)
+                {
+                    drive.ProcessPresentation(cachePresentation);
+                }
+                else
+                {
+                    LogOutputWithNewLine(string.Format("Presentation {0} not found in cache", presentationId));
+                }
 
                 #endregion
             }
@@ -82,7 +90,7 @@ namespace GoogleDrive
                 CacheFolder rootFolder;
                 if (specificFolderId != null)
                 {
-                    rootFolder = drive.Cache.GetFolder(specificFolderId, null);
+                    rootFolder = drive.Cache.GetFolder(specificFolderId, drive.Cache.Folders);
                     if (rootFolder == null)
                     {
                         //Specified folder id not found in cache
@@ -104,6 +112,15 @@ namespace GoogleDrive
 
                 #endregion
             }
+
+            if (drive.SlideErrors.Count > 0)
+            {
+                LogOutput(string.Format("{0} errors found", drive.SlideErrors.Count));
+                foreach (var slideError in drive.SlideErrors)
+                {
+                    LogOutput(string.Format("Presentation: {0} {1}, Slide: {2}, Error: {3}", slideError.PresentationId,  slideError.PresentationName, slideError.SlideId, slideError.Error));
+                }
+            }
             LogOutputWithNewLine("Finished...");
         }
 
@@ -120,10 +137,10 @@ namespace GoogleDrive
         {
             Console.WriteLine("GoogleDrive [/?] [/Id=<PresentationId>] [/RefreshList] [/StartFrom=<Index>]");
             Console.WriteLine("Only one of the parameters can be specified at a time:");
-            Console.WriteLine("/Id          Process only this presentation");
-            Console.WriteLine("/RefreshList Forces refresh of the local cache");
-            Console.WriteLine("/StartFrom   Skips succeeded presentations");
-            Console.WriteLine("/?           Prints this help");
+            Console.WriteLine("/RootFolderId    Process only this Root Folder and its subfolders");
+            Console.WriteLine("/RefreshList     Forces refresh of the local cache");
+            Console.WriteLine("/PresentationId  Skips succeeded presentations");
+            Console.WriteLine("/?               Prints this help");
             Environment.Exit(exitCode);
         }
     }
