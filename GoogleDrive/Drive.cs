@@ -231,6 +231,28 @@ namespace GoogleDrive
 
     #endregion
 
+    #region Class Process Event Args
+
+    public class SlideErrorEventArgs : EventArgs 
+    {
+        #region Properties
+
+        public SlideError SlideError { get; set; }
+
+        #endregion
+
+        #region C'Tor/D'Tor
+
+        public SlideErrorEventArgs(SlideError slideError)
+        {
+            SlideError = slideError;
+        }
+
+        #endregion
+    }
+
+    #endregion
+
     #region Class Drive
 
     public class Drive
@@ -332,8 +354,6 @@ namespace GoogleDrive
             pathSeparator = ConfigurationManager.AppSettings["PathSeparator"];
             folderNameSeparator = ConfigurationManager.AppSettings["FolderNameSeparator"];
 
-            SlideErrors = new List<SlideError>();
-
             #endregion
 
             #region Load Config Variables
@@ -378,11 +398,6 @@ namespace GoogleDrive
         /// Returns the presentations list
         /// </summary>
         public Cache Cache { get; private set; }
-
-        /// <summary>
-        /// Returns a list of errors found in slides
-        /// </summary>
-        public List<SlideError> SlideErrors { get; private set; }
 
         #endregion
 
@@ -682,7 +697,6 @@ namespace GoogleDrive
                     var slideHeaderIndex = -1;
                     var slideFooterIndex = -1;
                     var slidePageIdIndex = -1;
-                    var slideHeaderCreated = false;
                     var slideFooterCreated = false;
                     var slidePageIdCreated = false;
 
@@ -693,23 +707,44 @@ namespace GoogleDrive
                         {
                             //Found the header object
                             if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
-                            presentation.Slides[i].PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY)
+                                presentation.Slides[i].PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY &&
+                                presentation.Slides[i].PageElements[j].Transform.TranslateX == slideHeaderTransform.TranslateX &&
+                                presentation.Slides[i].PageElements[j].Transform.TranslateY == slideHeaderTransform.TranslateY)
+
                             {
                                 slideHeaderIndex = j;
                             }
 
                             //Found the page id object
                             else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
-                            presentation.Slides[i].PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY)
+                                     presentation.Slides[i].PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY &&
+                                     presentation.Slides[i].PageElements[j].Transform.TranslateX == slideFooterTransform.TranslateX &&
+                                     presentation.Slides[i].PageElements[j].Transform.TranslateY == slideFooterTransform.TranslateY)
+
                             {
                                 slideFooterIndex = j;
                             }
 
                             //Found the page id object
                             else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
-                            presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
+                                     presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY &&
+                                     presentation.Slides[i].PageElements[j].Transform.TranslateX == slidePageIdTransform.TranslateX &&
+                                     presentation.Slides[i].PageElements[j].Transform.TranslateY == slidePageIdTransform.TranslateY)
+
                             {
-                                slidePageIdIndex = j;
+                                if (presentation.Slides[i].PageElements[j].Shape.Text == null ||
+                                    presentation.Slides[i].PageElements[j].Shape.Text.TextElements == null ||
+                                    presentation.Slides[i].PageElements[j].Shape.Text.TextElements.Count < 2 ||
+                                    presentation.Slides[i].PageElements[j].Shape.Text.TextElements[1].TextRun == null)
+                                {
+                                    //An empty text box at the location of the page id - delete it
+                                    myBatchRequest.AddDeleteObjectRequest(presentation.Slides[i].PageElements[j].ObjectId);
+                                }                    
+                                else
+                                {
+                                    //This is the page id text box
+                                    slidePageIdIndex = j;
+                                }
                             }
                         }
                     }
@@ -717,24 +752,21 @@ namespace GoogleDrive
                     string desiredPageId = (i + 1).ToString();
                     string desiredFooter = cachePresentation.FooterText + "\n";
 
-                    //Header - exclude last 2 slides (homework + toc)
-                    if (i < presentation.Slides.Count - 2)
+                    //Header
+                    if (slideHeaderIndex >= 0 && 
+                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape != null &&
+                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text != null &&
+                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements != null &&
+                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements.Count > 1 &&
+                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun != null &&
+                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content != null)
                     {
-                        if (slideHeaderIndex >= 0)
+                        //Header text box exists - check if text contains search text in config
+                        if (presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader))
                         {
-                            //Header text box exists
-                            if (presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader))
-                            {
-                                SlideErrors.Add(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader));
-                            }
+                            PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader)));
                         }
-                        else
-                        {
-                            //Create a new text box to hold the slide header
-                            myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideHeaderSize, slideHeaderTransform);
-                            slidePageIdCreated = true;
-                        }
-                    }
+                    }                   
 
                     //Footer - exclude last 2 slides (homework + toc)
                     if (i < presentation.Slides.Count - 2)
@@ -782,14 +814,6 @@ namespace GoogleDrive
                     {
                         if (batchResponse.Replies[k].CreateShape != null)
                         {
-                            if (slideHeaderCreated)
-                            {
-                                addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, "", 0);
-                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideHeaderTextBoxTextStyle", slideHeaderTextBoxTextStyleFields, 0, 0, null);
-                                addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
-                                slideHeaderCreated = false;
-                                textBoxesAdded = true;
-                            }
                             if (slideFooterCreated)
                             {
                                 addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredFooter, 0);
@@ -854,13 +878,26 @@ namespace GoogleDrive
                     createTOCBatchRequest.Execute();
                 }
                 #endregion
+
+                #region Raise events
+
+                PresentationProcessed.Invoke(this, null);
+
+                #endregion
             }
-            catch(Exception e)
+            catch (Exception e)
             {
-                SlideErrors.Add(new SlideError(cachePresentation.PresentationId, cachePresentation.PresentationName, 0, e.StackTrace));
+                PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(cachePresentation.PresentationId, cachePresentation.PresentationName, 0, e.StackTrace)));
                 throw (e);
             }
         }
+
+        #endregion
+
+        #region Events
+
+        public event EventHandler PresentationProcessed;
+        public event EventHandler PresentationError;
 
         #endregion
 
