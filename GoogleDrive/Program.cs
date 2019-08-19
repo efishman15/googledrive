@@ -7,6 +7,7 @@ namespace GoogleDrive
     {
         static Drive drive;
         static int slidesProcessed;
+        static int slidesSkipped;
 
         static void Main(string[] args)
         {
@@ -26,11 +27,12 @@ namespace GoogleDrive
             
             #endregion
 
-            LogOutput("Started...");
+            LogOutputWithNewLine("Started...");
 
             drive = new Drive();
             drive.PresentationProcessed += Drive_PresentationProcessed;
             drive.PresentationError += Drive_PresentationError;
+            drive.PresentationSkipped += Drive_PresentationSkipped;
 
             #region Parse args
 
@@ -83,13 +85,13 @@ namespace GoogleDrive
 
                 if (refreshCache || drive.Cache.Folders.Count == 0)
                 {
-                    LogOutput("Building presentations list...");
+                    LogOutputWithNewLine("Building presentations list...");
                     drive.ClearCache();
                     drive.BuildPresentationsList(rootFolderId, true, null);
                     drive.BuildFoldersPath(drive.Cache.Folders, string.Empty);
                     drive.SaveCache();
 
-                    LogOutput("Finished building presentations list...");
+                    LogOutputWithNewLine("Finished building presentations list...");
                 }
 
                 CacheFolder rootFolder;
@@ -101,16 +103,16 @@ namespace GoogleDrive
                         //Specified folder id not found in cache
                         PrintUsageAndExit(3);
                     }
-                    LogOutput(string.Format("Processing {0} presentations in folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
+                    LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
 
                     drive.ProcessFolderPresentations(rootFolder);
                 }
                 else
                 {
-                    LogOutput(string.Format("Processing {0} presentations", drive.Cache.TotalPresentations));
+                    LogOutputWithNewLine(string.Format("Processing {0} presentations", drive.Cache.TotalPresentations));
                     foreach (var folderKey in drive.Cache.Folders.Keys)
                     {
-                        LogOutput(string.Format("Processing {0} presentations in folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
+                        LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
                         drive.ProcessFolderPresentations(drive.Cache.Folders[folderKey]);
                     }
                 }
@@ -121,22 +123,29 @@ namespace GoogleDrive
             LogOutputWithNewLine("Finished...");
         }
 
+        private static void Drive_PresentationSkipped(object sender, EventArgs e)
+        {
+            slidesSkipped++;
+            OutputProgress();
+        }
+
         private static void Drive_PresentationError(object sender, EventArgs e)
         {
             var slideErrorEventArgs = (SlideErrorEventArgs)e;
-            LogOutput(string.Format("Presentation: {0} {1}, Slide: {2}, Error: {3}", slideErrorEventArgs.SlideError.PresentationId, slideErrorEventArgs.SlideError.PresentationName, slideErrorEventArgs.SlideError.SlideId, slideErrorEventArgs.SlideError.Error));
+            LogOutputWithNewLine(string.Format("Presentation: {0} {1}, Slide: {2}, Error: {3}", slideErrorEventArgs.SlideError.PresentationId, slideErrorEventArgs.SlideError.PresentationName, slideErrorEventArgs.SlideError.SlideId, slideErrorEventArgs.SlideError.Error));
         }
 
-        static void Drive_PresentationProcessed(object sender, EventArgs e)
+        private static void Drive_PresentationProcessed(object sender, EventArgs e)
         {
             slidesProcessed++;
-            Console.Write(string.Format("\r{0} presentations processed...", slidesProcessed));
+            OutputProgress();
         }
 
-        static void LogOutput(string line)
+        private static void OutputProgress()
         {
-            Console.WriteLine(string.Format("{0}: {1}", DateTime.Now, line));
+            Console.Write(string.Format("\rStatus: processed: {0}, skipped: {1}, total: {2}...", slidesProcessed,slidesSkipped, slidesProcessed+slidesSkipped));
         }
+
         static void LogOutputWithNewLine(string line)
         {
             Console.WriteLine(string.Format("\n{0}: {1}", DateTime.Now, line));

@@ -257,11 +257,17 @@ namespace GoogleDrive
 
     public class Drive
     {
+        #region constants 
+
+        const string APP_PROPERTY_NORMALIZE_TIME = "NormalizeTime";
+
+        #endregion
+
         #region Class Members
 
         private DriveService driveService;
         private SlidesService slidesService;
-        private static string[] Scopes = { DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
+        private static string[] Scopes = { DriveService.Scope.DriveMetadata, DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
         private static string ApplicationName = "Google Drive";
         private JsonSerializer jsonSerializer;
         private string foldersFilter;
@@ -593,10 +599,32 @@ namespace GoogleDrive
 
                 #endregion
 
+                #region Load Presentation As a Drive File
+
+                var presentationFileRequest = driveService.Files.Get(cachePresentation.PresentationId);
+                presentationFileRequest.Fields = "appProperties, modifiedTime";
+                var presentationFile = presentationFileRequest.Execute();
+                if (presentationFile.AppProperties == null)
+                {
+                    presentationFile.AppProperties = new Dictionary<string, string>();
+                }
+                if (presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
+                {
+                    if (presentationFile.ModifiedTime <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                    {
+                        //File was not modified since it was last processed - skip
+                        PresentationSkipped.Invoke(null, null);
+                        return;
+                    }
+                }
+
+                #endregion
+
                 #region Load Presentation
 
                 var presentationRequest = slidesService.Presentations.Get(cachePresentation.PresentationId);
                 var presentation = presentationRequest.Execute();
+                
                 var myBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
 
                 #endregion
@@ -879,6 +907,24 @@ namespace GoogleDrive
                 }
                 #endregion
 
+                #region Mark as processed in app properties
+
+                var currentTime = DateTime.Now.ToString();
+                if (!presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
+                {
+                    presentationFile.AppProperties.Add(APP_PROPERTY_NORMALIZE_TIME, currentTime);
+                }
+                else
+                {
+                    presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME] = currentTime;
+                }
+                var updatePresentationFileRequest = driveService.Files.Update(presentationFile, cachePresentation.PresentationId);
+                updatePresentationFileRequest.Fields = "appProperties";
+                updatePresentationFileRequest.Execute();
+
+
+                #endregion
+
                 #region Raise events
 
                 PresentationProcessed.Invoke(this, null);
@@ -897,6 +943,7 @@ namespace GoogleDrive
         #region Events
 
         public event EventHandler PresentationProcessed;
+        public event EventHandler PresentationSkipped;
         public event EventHandler PresentationError;
 
         #endregion
