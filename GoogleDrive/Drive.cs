@@ -909,19 +909,19 @@ namespace GoogleDrive
 
                 #region Mark as processed in app properties
 
-                var currentTime = DateTime.Now.ToString();
+                //Make sure normalize time is always after the modified time (15 seconds after)
+                var normalizeTime = DateTime.Now.AddSeconds(15).ToString();
                 if (!presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                 {
-                    presentationFile.AppProperties.Add(APP_PROPERTY_NORMALIZE_TIME, currentTime);
+                    presentationFile.AppProperties.Add(APP_PROPERTY_NORMALIZE_TIME, normalizeTime);
                 }
                 else
                 {
-                    presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME] = currentTime;
+                    presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME] = normalizeTime;
                 }
                 var updatePresentationFileRequest = driveService.Files.Update(presentationFile, cachePresentation.PresentationId);
                 updatePresentationFileRequest.Fields = "appProperties";
                 updatePresentationFileRequest.Execute();
-
 
                 #endregion
 
