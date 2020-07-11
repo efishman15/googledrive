@@ -5,6 +5,8 @@ using Google.Apis.Services;
 using Google.Apis.Slides.v1;
 using Google.Apis.Slides.v1.Data;
 using Google.Apis.Util.Store;
+using Microsoft.Office.Core;
+using Microsoft.Office.Interop.PowerPoint;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using System;
@@ -233,7 +235,7 @@ namespace GoogleDrive
 
     #region Class Process Event Args
 
-    public class SlideErrorEventArgs : EventArgs 
+    public class SlideErrorEventArgs : EventArgs
     {
         #region Properties
 
@@ -303,6 +305,15 @@ namespace GoogleDrive
         private readonly AlignImage alignImage;
 
         private readonly string lookForTextInHeader;
+
+        private readonly string msPowerPointMimeType;
+        private readonly string msPowerPointTempLocalFileName;
+        private readonly int msPowerPointPageNumberMinTop;
+        private readonly int msPowerPointAutoShapeMaxHeight;
+
+        private readonly Application pptApplication;
+        private readonly Presentations pptPresentations;
+        private readonly int whiteColor;
 
         #endregion
 
@@ -392,6 +403,15 @@ namespace GoogleDrive
             alignImage = (AlignImage)Enum.Parse(typeof(AlignImage), ConfigurationManager.AppSettings["ImageAlign"]);
 
             lookForTextInHeader = ConfigurationManager.AppSettings["LookForTextInHeader"];
+
+            msPowerPointMimeType = ConfigurationManager.AppSettings["MSPowerPointMimeType"];
+            msPowerPointTempLocalFileName = ConfigurationManager.AppSettings["MSPowerPointTempLocalFileName"];
+            whiteColor = int.Parse(ConfigurationManager.AppSettings["WhiteColor"]);
+            msPowerPointPageNumberMinTop = int.Parse(ConfigurationManager.AppSettings["MSPowerPointPageNumberMinTop"]);
+            msPowerPointAutoShapeMaxHeight = int.Parse(ConfigurationManager.AppSettings["MSPowerPointAutoShapeMaxHeight"]);
+
+            pptApplication = new Application();
+            pptPresentations = pptApplication.Presentations;
 
             #endregion
 
@@ -517,7 +537,7 @@ namespace GoogleDrive
                     {
                         root[folderKey].Path = parentPath + pathSeparator + NormalizeFolderName(root[folderKey].FolderName);
                     }
-                    foreach(var presentation in root[folderKey].Presentations)
+                    foreach (var presentation in root[folderKey].Presentations)
                     {
                         presentation.FooterText = root[folderKey].Path;
                     }
@@ -604,6 +624,7 @@ namespace GoogleDrive
                 var presentationFileRequest = driveService.Files.Get(cachePresentation.PresentationId);
                 presentationFileRequest.Fields = "appProperties, modifiedTime";
                 var presentationFile = presentationFileRequest.Execute();
+
                 if (presentationFile.AppProperties == null)
                 {
                     presentationFile.AppProperties = new Dictionary<string, string>();
@@ -617,14 +638,13 @@ namespace GoogleDrive
                         return;
                     }
                 }
-
                 #endregion
 
                 #region Load Presentation
 
                 var presentationRequest = slidesService.Presentations.Get(cachePresentation.PresentationId);
                 var presentation = presentationRequest.Execute();
-                
+
                 var myBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
 
                 #endregion
@@ -767,7 +787,7 @@ namespace GoogleDrive
                                 {
                                     //An empty text box at the location of the page id - delete it
                                     myBatchRequest.AddDeleteObjectRequest(presentation.Slides[i].PageElements[j].ObjectId);
-                                }                    
+                                }
                                 else
                                 {
                                     //This is the page id text box
@@ -781,7 +801,7 @@ namespace GoogleDrive
                     string desiredFooter = cachePresentation.FooterText + "\n";
 
                     //Header
-                    if (slideHeaderIndex >= 0 && 
+                    if (slideHeaderIndex >= 0 &&
                         presentation.Slides[i].PageElements[slideHeaderIndex].Shape != null &&
                         presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text != null &&
                         presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements != null &&
@@ -794,7 +814,7 @@ namespace GoogleDrive
                         {
                             PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader)));
                         }
-                    }                   
+                    }
 
                     //Footer - exclude last 2 slides (homework + toc)
                     if (i < presentation.Slides.Count - 2)
@@ -907,6 +927,10 @@ namespace GoogleDrive
                 }
                 #endregion
 
+                #region Validate presentation animations using download and local inspect via PowerPoint
+                ValidatePresentationAnimations(cachePresentation);
+                #endregion
+
                 #region Mark as processed in app properties
 
                 //Make sure normalize time is always after the modified time (15 seconds after)
@@ -938,8 +962,65 @@ namespace GoogleDrive
             }
         }
 
-        #endregion
+        /// <summary>
+        /// Exports and Download the presentation as a Microsoft Powerpoint file (.pptx) and validates each slide:
+        /// if a slide contains at least one image object (without a border, e.g. a question) - 
+        /// it must contain animations if there are text boxes or lines/arrows
+        /// </summary>
+        /// <param name="cachePresentation"></param>
+        public void ValidatePresentationAnimations(CachePresentation cachePresentation)
+        {
+            bool slideHasStudentQuestion;
+            bool slideHasSolution;
 
+            //var lp = pptPresentations.Open("c:\\dev\\1.pptx", MsoTriState.msoTrue, MsoTriState.msoFalse, MsoTriState.msoFalse);
+            //var sp = lp.Slides;
+
+            #region Download presentation as powerpoint
+
+            var exportRequest = driveService.Files.Export(cachePresentation.PresentationId, msPowerPointMimeType);
+            var driveStream = exportRequest.ExecuteAsStream();
+            var exportPath = Path.Combine(Path.GetTempPath(), msPowerPointTempLocalFileName);
+            var fileStream = new FileStream(exportPath, FileMode.CreateNew);
+            driveStream.CopyTo(fileStream);
+            fileStream.Close();
+
+            #endregion
+
+            var localPresentation = pptPresentations.Open(exportPath, MsoTriState.msoTrue, MsoTriState.msoFalse, MsoTriState.msoFalse);
+            for (var i = 1; i <= localPresentation.Slides.Count; i++)
+            {
+                var slide = localPresentation.Slides[i];
+                slideHasStudentQuestion = false;
+                slideHasSolution = false;
+                for (var j = 1; j <= slide.Shapes.Count; j++)
+                {
+                    var shape = slide.Shapes[j];
+                    if (shape.Type == MsoShapeType.msoPicture && shape.Line.ForeColor.RGB == whiteColor && slide.TimeLine.MainSequence.Count == 0)
+                    {
+                        slideHasStudentQuestion = true;
+                    }
+                    else if (shape.Type == MsoShapeType.msoLine ||
+                             (shape.Type == MsoShapeType.msoAutoShape && shape.Height < msPowerPointAutoShapeMaxHeight) ||
+                             shape.Type == MsoShapeType.msoFreeform ||
+                             shape.Type == MsoShapeType.msoTable ||
+                             (shape.Type == MsoShapeType.msoTextBox && shape.Top < msPowerPointPageNumberMinTop))
+                    {
+                        slideHasSolution = true;
+                    }
+                }
+                if (slideHasStudentQuestion && slideHasSolution)
+                {
+                    PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(cachePresentation.PresentationId, cachePresentation.PresentationName, i, "Should have animations")));
+                }
+            }
+            localPresentation.Close();
+
+            File.Delete(exportPath);
+        }
+
+        #endregion
+    
         #region Events
 
         public event EventHandler PresentationProcessed;
@@ -1017,7 +1098,7 @@ namespace GoogleDrive
         /// <summary>
         /// Adds a DeleteText request to an object - to delete its entire text
         /// </summary>
-        public void AddDeleteTextRequest(string objectId, Shape shape)
+        public void AddDeleteTextRequest(string objectId, Google.Apis.Slides.v1.Data.Shape shape)
         {
             if (shape.Text == null)
             {
@@ -1063,7 +1144,7 @@ namespace GoogleDrive
         public void AddUpdateTextStyleRequest(string objectId, string textStyleConfigKey, string textStyleFields, int startIndex, int endIndex, Link link = null, bool underline = true)
         {
             var fields = String.Copy(textStyleFields);
-            var textStyle = JsonConvert.DeserializeObject<TextStyle>(ConfigurationManager.AppSettings[textStyleConfigKey]);
+            var textStyle = JsonConvert.DeserializeObject<Google.Apis.Slides.v1.Data.TextStyle>(ConfigurationManager.AppSettings[textStyleConfigKey]);
 
             if (link != null)
             {

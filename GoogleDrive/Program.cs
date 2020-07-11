@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Configuration;
+using Microsoft.Office.Interop.PowerPoint;
+using Microsoft.Office.Core;
 
 namespace GoogleDrive
 {
