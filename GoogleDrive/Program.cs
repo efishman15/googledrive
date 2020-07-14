@@ -5,13 +5,20 @@ using Microsoft.Office.Core;
 
 namespace GoogleDrive
 {
-    static class Program
+    internal static class Program
     {
-        static Drive drive;
-        static int slidesProcessed;
-        static int slidesSkipped;
+        private enum ProcessingType
+        {
+            PRESENTATION,
+            FOLDER,
+            STUDENTS
+        };
+        private static Drive drive;
+        private static int slidesProcessed;
+        private static int slidesSkipped;
+        private static ProcessingType processingType;
 
-        static void Main(string[] args)
+        private static void Main(string[] args)
         {
             #region Validate args
 
@@ -21,7 +28,12 @@ namespace GoogleDrive
                 {
                     PrintUsageAndExit(1);
                 }
-                else if (args[0] != "/RefreshList" && (!args[0].StartsWith("/RootFolderId=") || args[0].Length<15) && (!args[0].StartsWith("/PresentationId=") || args[0].Length < 17))
+                else if (
+                            args[0] != "/RefreshList" && 
+                            (!args[0].StartsWith("/RootFolderId=") || args[0].Length<15) && 
+                            (!args[0].StartsWith("/PresentationId=") || args[0].Length < 17) &&
+                            args[0] != "/Students"
+                        )
                 {
                     PrintUsageAndExit(2);
                 }
@@ -41,7 +53,6 @@ namespace GoogleDrive
             string presentationId = null;
             string specificFolderId = null;
             
-            var refreshCache = false;
             if (args.Length > 0) {
                 if (args[0] == "/?")
                 {
@@ -50,76 +61,78 @@ namespace GoogleDrive
                 if (args[0].StartsWith("/RootFolderId="))
                 {
                     specificFolderId = args[0].Split('=')[1];
+                    processingType = ProcessingType.FOLDER;
+                    
                 }
                 if (args[0].StartsWith("/PresentationId="))
                 {
                     presentationId = args[0].Split('=')[1];
+                    processingType = ProcessingType.PRESENTATION;
                 }
-                else if (args[0] == "/RefreshList")
+                else if (args[0] == "/Students")
                 {
-                    refreshCache = true;
+                    processingType = ProcessingType.STUDENTS;
                 }
             }
 
             #endregion
 
-            if (presentationId != null)
+            switch (processingType) 
             {
-                #region Process specfic presentation
+                case ProcessingType.PRESENTATION:
 
-                var cachePresentation = drive.Cache.GetPresentation(presentationId, drive.Cache.Folders);
-                if (cachePresentation != null)
-                {
-                    drive.ProcessPresentation(cachePresentation);
-                }
-                else
-                {
-                    LogOutputWithNewLine(string.Format("Presentation {0} not found in cache", presentationId));
-                }
+                    #region Process specfic presentation
+
+                    var cachePresentation = drive.TeacherCache.GetPresentation(presentationId, drive.TeacherCache.Folders);
+                    if (cachePresentation != null)
+                    {
+                        drive.ProcessTeacherPresentation(cachePresentation);
+                    }
+                    else
+                    {
+                        LogOutputWithNewLine(string.Format("Presentation {0} not found in cache", presentationId));
+                    }
+                    break;
 
                 #endregion
-            }
-            else
-            {
-                #region Process folder presentations
 
-                var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
+                case ProcessingType.FOLDER:
 
-                if (refreshCache || drive.Cache.Folders.Count == 0)
-                {
-                    LogOutputWithNewLine("Building presentations list...");
-                    drive.ClearCache();
-                    drive.BuildPresentationsList(rootFolderId, true, null);
-                    drive.BuildFoldersPath(drive.Cache.Folders, string.Empty);
-                    drive.SaveCache();
+                    #region Process folder presentations
 
-                    LogOutputWithNewLine("Finished building presentations list...");
-                }
+                    var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
 
-                CacheFolder rootFolder;
-                if (specificFolderId != null)
-                {
-                    rootFolder = drive.Cache.GetFolder(specificFolderId, drive.Cache.Folders);
-                    if (rootFolder == null)
+                    CacheFolder rootFolder;
+                    if (specificFolderId != null)
                     {
-                        //Specified folder id not found in cache
-                        PrintUsageAndExit(3);
-                    }
-                    LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
+                        rootFolder = drive.TeacherCache.GetFolder(specificFolderId, drive.TeacherCache.Folders);
+                        if (rootFolder == null)
+                        {
+                            //Specified folder id not found in cache
+                            PrintUsageAndExit(3);
+                        }
+                        LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
 
-                    drive.ProcessFolderPresentations(rootFolder);
-                }
-                else
-                {
-                    LogOutputWithNewLine(string.Format("Processing {0} presentations", drive.Cache.TotalPresentations));
-                    foreach (var folderKey in drive.Cache.Folders.Keys)
-                    {
-                        LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", drive.Cache.Folders[folderKey].TotalPresentations, drive.Cache.Folders[folderKey].FolderName));
-                        drive.ProcessFolderPresentations(drive.Cache.Folders[folderKey]);
+                        drive.ProcessTeacherPresentations(rootFolder);
                     }
-                }
+                    else
+                    {
+                        LogOutputWithNewLine(string.Format("Processing {0} presentations", drive.TeacherCache.TotalPresentations));
+                        foreach (var folderKey in drive.TeacherCache.Folders.Keys)
+                        {
+                            LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", drive.TeacherCache.Folders[folderKey].TotalPresentations, drive.TeacherCache.Folders[folderKey].FolderName));
+                            drive.ProcessTeacherPresentations(drive.TeacherCache.Folders[folderKey]);
+                        }
+                    }
+
+                    break;
 
                 #endregion
+
+                case ProcessingType.STUDENTS:
+
+                    drive.ProcessStudentsPresentations();
+                    break;
             }
 
             LogOutputWithNewLine("Finished...");
@@ -148,18 +161,18 @@ namespace GoogleDrive
             Console.Write(string.Format("\rStatus: processed: {0}, skipped: {1}, total: {2}...", slidesProcessed,slidesSkipped, slidesProcessed+slidesSkipped));
         }
 
-        static void LogOutputWithNewLine(string line)
+        private static void LogOutputWithNewLine(string line)
         {
             Console.WriteLine(string.Format("\n{0}: {1}", DateTime.Now, line));
         }
 
-        static void PrintUsageAndExit(int exitCode)
+        private static void PrintUsageAndExit(int exitCode)
         {
-            Console.WriteLine("GoogleDrive [/?] [/Id=<PresentationId>] [/RefreshList] [/StartFrom=<Index>]");
+            Console.WriteLine("GoogleDrive [/?] [/RefreshList] [/RootFolderId=<FolderId>] [/Id=<PresentationId>]");
             Console.WriteLine("Only one of the parameters can be specified at a time:");
             Console.WriteLine("/RootFolderId    Process only this Root Folder and its subfolders");
-            Console.WriteLine("/RefreshList     Forces refresh of the local cache");
             Console.WriteLine("/PresentationId  Skips succeeded presentations");
+            Console.WriteLine("/Students        Process students presentations");
             Console.WriteLine("/?               Prints this help");
             Environment.Exit(exitCode);
         }

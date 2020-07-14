@@ -2,8 +2,11 @@
 using Google.Apis.Drive.v3;
 using Google.Apis.Requests;
 using Google.Apis.Services;
+using Google.Apis.Sheets.v4;
 using Google.Apis.Slides.v1;
 using Google.Apis.Slides.v1.Data;
+using Google.Apis.Script.v1;
+using Google.Apis.Script.v1.Data;
 using Google.Apis.Util.Store;
 using Microsoft.Office.Core;
 using Microsoft.Office.Interop.PowerPoint;
@@ -14,6 +17,8 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.IO;
 using System.Threading;
+using System.Text.RegularExpressions;
+using Google.Apis.Sheets.v4.Data;
 
 namespace GoogleDrive
 {
@@ -89,10 +94,33 @@ namespace GoogleDrive
             Folders.Add(folderId, new CacheFolder(folderId, folderName, this.FolderId));
         }
 
+        /// <summary>
+        /// Adds a presentation to a folder
+        /// </summary>
+        /// <param name="presentationId"></param>
+        /// <param name="presentationName"></param>
         public void AddPresentation(string presentationId, string presentationName)
         {
             Presentations.Add(new CachePresentation(presentationId, presentationName));
             TotalPresentations++;
+        }
+
+        /// <summary>
+        /// Check if subfolder exists by its name
+        /// </summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
+        public CacheFolder GetSubFolderByName(string name)
+        {
+            foreach(var key in Folders.Keys)
+            {
+                if (Folders[key].FolderName == name)
+                {
+                    return Folders[key];
+                }
+            }
+
+            return null;
         }
         #endregion
     }
@@ -101,52 +129,68 @@ namespace GoogleDrive
     #region Class Cache
     public class Cache
     {
+        #region Private Members
+
+        private string foldersFilter;
+        private DriveService driveService;
+        private int pathStartLevel;
+        private string pathSeparator;
+        private string folderNameSeparator;
+        private string folderMimeType;
+        private string presentationMimeType;
+
+
+        #endregion
+
         #region Properties
-        public Dictionary<string, CacheFolder> Folders { get; private set; }
+
+        public string Name { get; private set; }
+        public Dictionary<string, CacheFolder> Folders { get; set; }
         public int TotalPresentations { get; set; }
         public string DateCreated { get; set; }
+
         #endregion
 
         #region C'Tor/Dtor
-        public Cache()
+
+        public Cache(DriveService driveService, string name)
         {
+            Name = name;
+            this.driveService = driveService;
+            TotalPresentations = 0;
             Folders = new Dictionary<string, CacheFolder>();
         }
+
+        public static Cache Load(DriveService driveService, string name)
+        {
+            // deserialize JSON directly from a file
+            string cacheFileName = ConfigurationManager.AppSettings[name + "Cache"];
+            if (System.IO.File.Exists(cacheFileName))
+            {
+                using (StreamReader file = System.IO.File.OpenText(cacheFileName))
+                {
+                    var jsonSerializer = new JsonSerializer();
+                    Cache cache = (Cache)jsonSerializer.Deserialize(file, typeof(Cache));
+                    cache.Init();
+                    return cache;
+                }
+            }
+            else
+            {
+                var cache = new Cache(driveService, name);
+                cache.Init();
+
+                cache.Build(ConfigurationManager.AppSettings[name + "RootFolderId"], true, null);
+
+                cache.BuildFoldersPath(cache.Folders, string.Empty);
+                cache.Save();
+                return cache;
+            }
+        }
+
         #endregion
 
         #region Methods
-
-        /// <summary>
-        /// Adds a presentation to the folder in the tree
-        /// </summary>
-        /// <param name="folderId"></param>
-        /// <param name="presentationId"></param>
-        /// <param name="presentationName"></param>
-        public void AddPresentationToFolder(string folderId, string presentationId, string presentationName)
-        {
-            var parentFolder = GetFolder(folderId, Folders);
-            if (parentFolder != null)
-            {
-                parentFolder.AddPresentation(presentationId, presentationName);
-                TotalPresentations++;
-
-                //Bubble counter up
-                var currentFolder = GetFolder(parentFolder.ParentFolderId, Folders);
-                while (currentFolder != null)
-                {
-                    currentFolder.TotalPresentations++;
-                    if (currentFolder.ParentFolderId != null)
-                    {
-                        currentFolder = GetFolder(currentFolder.ParentFolderId, Folders);
-                    }
-                    else
-                    {
-                        currentFolder = null;
-                    }
-                }
-
-            }
-        }
 
         /// <summary>
         /// Get a folder in the tree by its folder id (recurssive)
@@ -154,8 +198,13 @@ namespace GoogleDrive
         /// <param name="folderId"></param>
         /// <param name="folders"></param>
         /// <returns></returns>
-        public CacheFolder GetFolder(string folderId, Dictionary<string, CacheFolder> folders)
+        public CacheFolder GetFolder(string folderId, Dictionary<string, CacheFolder> folders = null)
         {
+            if (folders == null)
+            {
+                folders = Folders;
+            }
+
             if (folders.ContainsKey(folderId))
             {
                 return folders[folderId];
@@ -172,6 +221,28 @@ namespace GoogleDrive
                 }
             }
 
+            return null;
+        }
+
+        /// <summary>
+        /// Gets a subfolder from given root folder by its name
+        /// </summary>
+        /// <param name="name"></param>
+        /// <param name="folders"></param>
+        /// <returns></returns>
+        public CacheFolder GetSubFolder(string name, Dictionary<string, CacheFolder> folders = null)
+        {
+            if (folders == null)
+            {
+                folders = Folders;
+            }
+            foreach(var key in folders.Keys)
+            {
+                if (folders[key].FolderName == name)
+                {
+                    return folders[key];
+                }
+            }
             return null;
         }
 
@@ -201,6 +272,232 @@ namespace GoogleDrive
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Returns folder mime type in google drive as in app.config
+        /// </summary>
+        /// <returns></returns>
+        public string GetFolderMimeType()
+        {
+            return folderMimeType;
+        }
+
+        /// <summary>
+        /// Returns presentation mime type in google drive as in app.config
+        /// </summary>
+        /// <returns></returns>
+        public string GetPresentationMimeType()
+        {
+            return presentationMimeType;
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        /// <summary>
+        /// Initialize variables from config
+        /// </summary>
+        /// <param name="driveService"></param>
+        /// <param name="name"></param>
+        /// <param name="pathStartLevel"></param>
+        private void Init()
+        {
+            pathStartLevel = Convert.ToInt32(ConfigurationManager.AppSettings[Name + "PathStartLevel"]);
+
+            pathSeparator = ConfigurationManager.AppSettings["PathSeparator"];
+            folderNameSeparator = ConfigurationManager.AppSettings["FolderNameSeparator"];
+
+            folderMimeType = ConfigurationManager.AppSettings["FolderMimeType"];
+            presentationMimeType = ConfigurationManager.AppSettings["PresentationMimeType"];
+        }
+
+        /// <summary>
+        /// Build recursivelly a cache of all folders and presentations under a top root folder in Google Drive
+        /// </summary>
+        /// <param name="rootFolderId"></param>
+        /// <param name="isTop"></param>
+        /// <param name=""></param>
+        private void Build(string rootFolderId, bool isTop, CacheFolder parentFolder)
+        {
+            string filter = "'" + rootFolderId + "' in parents AND (mimeType = '" + folderMimeType + "') AND trashed=false";
+            string pageToken = null;
+
+            if (isTop)
+            {
+                foldersFilter = string.Empty;
+            }
+            do
+            {
+                var folderRequest = driveService.Files.List();
+                folderRequest.Q = filter;
+                folderRequest.Spaces = "drive";
+                folderRequest.Fields = "nextPageToken, files(id,name)";
+                folderRequest.PageToken = pageToken;
+                var folderResult = folderRequest.Execute();
+                foreach (var folder in folderResult.Files)
+                {
+                    if (foldersFilter == string.Empty)
+                    {
+                        foldersFilter += "(";
+                    }
+                    else
+                    {
+                        foldersFilter += " or ";
+                    }
+                    foldersFilter += "'" + folder.Id + "' in parents";
+
+                    var newFolder = new CacheFolder(folder.Id, folder.Name, parentFolder?.FolderId);
+                    if (parentFolder == null)
+                    {
+                        newFolder.Level = 1;
+                        Folders.Add(newFolder.FolderId, newFolder);
+                    }
+                    else
+                    {
+                        parentFolder.Folders.Add(newFolder.FolderId, newFolder);
+                        newFolder.Level = parentFolder.Level + 1;
+                    }
+
+                    Build(folder.Id, false, newFolder);
+                }
+                pageToken = folderResult.NextPageToken;
+            } while (pageToken != null);
+
+            if (isTop)
+            {
+                if (foldersFilter == string.Empty)
+                {
+                    //No folders in root folder - just files
+                    foldersFilter = "('" + rootFolderId + "' in parents) ";
+                }
+                else
+                {
+                    foldersFilter += ")";
+                }
+                filter = foldersFilter + " AND (mimeType = '" + presentationMimeType + "') AND trashed=false";
+                do
+                {
+                    var filesRequest = driveService.Files.List();
+                    filesRequest.Q = filter;
+                    filesRequest.Spaces = "drive";
+                    filesRequest.Fields = "nextPageToken, files(id, name, parents)";
+                    filesRequest.PageToken = pageToken;
+                    var fileResult = filesRequest.Execute();
+
+                    foreach (var file in fileResult.Files)
+                    {
+                        //If file is filed in more than 1 folder, add it only under the first folder
+                        //For the sake of this program - each presentation should be processed only once
+                        AddPresentationToFolder(file.Parents[0], file.Id, file.Name);
+                    }
+                    pageToken = fileResult.NextPageToken;
+                } while (pageToken != null);
+            }
+        }
+
+        /// <summary>
+        /// Process the cache:
+        /// Add path to folders starting at "PathStartLevel" as given when cache was created/loaded
+        /// </summary>
+        private void BuildFoldersPath(Dictionary<string, CacheFolder> root, string parentPath)
+        {
+            foreach (var folderKey in root.Keys)
+            {
+                if (root[folderKey].Level >= pathStartLevel)
+                {
+                    if (parentPath == string.Empty)
+                    {
+                        root[folderKey].Path = NormalizeFolderName(root[folderKey].FolderName);
+                    }
+                    else
+                    {
+                        root[folderKey].Path = parentPath + pathSeparator + NormalizeFolderName(root[folderKey].FolderName);
+                    }
+                    foreach (var presentation in root[folderKey].Presentations)
+                    {
+                        presentation.FooterText = root[folderKey].Path;
+                    }
+                }
+                else
+                {
+                    root[folderKey].Path = string.Empty;
+                }
+                BuildFoldersPath(root[folderKey].Folders, root[folderKey].Path);
+            }
+        }
+
+        /// <summary>
+        /// Adds a presentation to the folder in the tree
+        /// </summary>
+        /// <param name="folderId"></param>
+        /// <param name="presentationId"></param>
+        /// <param name="presentationName"></param>f
+        public void AddPresentationToFolder(string folderId, string presentationId, string presentationName)
+        {
+            var parentFolder = GetFolder(folderId, Folders);
+            if (parentFolder != null)
+            {
+                parentFolder.AddPresentation(presentationId, presentationName);
+                TotalPresentations++;
+
+                //Bubble counter up
+                var currentFolder = GetFolder(parentFolder.ParentFolderId, Folders);
+                while (currentFolder != null)
+                {
+                    currentFolder.TotalPresentations++;
+                    if (currentFolder.ParentFolderId != null)
+                    {
+                        currentFolder = GetFolder(currentFolder.ParentFolderId, Folders);
+                    }
+                    else
+                    {
+                        currentFolder = null;
+                    }
+                }
+
+            }
+        }
+
+        /// <summary>
+        /// Returns a normalized folder name - everything AFTER the folderNameSeparator in config (usually ".")
+        /// </summary>
+        /// <param name="folderName"></param>
+        /// <returns></returns>
+        private string NormalizeFolderName(string folderName)
+        {
+            if (!folderName.Contains(folderNameSeparator))
+            {
+                return folderName.Trim();
+            }
+
+            var splitArray = folderName.Split(folderNameSeparator.ToCharArray());
+            return splitArray[splitArray.Length - 1].Trim();
+        }
+
+        /// <summary>
+        /// Save cache to a local file
+        /// </summary>
+        private void Save()
+        {
+            var outputFileName = ConfigurationManager.AppSettings[Name + "Cache"];
+            if (System.IO.File.Exists(outputFileName))
+            {
+                System.IO.File.Delete(outputFileName);
+            }
+
+            var jsonSerializer = new JsonSerializer();
+
+            DateCreated = DateTime.Now.ToString();
+            jsonSerializer.Converters.Add(new JavaScriptDateTimeConverter());
+            jsonSerializer.NullValueHandling = NullValueHandling.Ignore;
+            using (StreamWriter sw = new StreamWriter(outputFileName))
+            using (JsonWriter writer = new JsonTextWriter(sw))
+            {
+                jsonSerializer.Serialize(writer, this);
+            }
+
         }
 
         #endregion
@@ -259,7 +556,7 @@ namespace GoogleDrive
 
     public class Drive
     {
-        #region constants 
+        #region Constants 
 
         const string APP_PROPERTY_NORMALIZE_TIME = "NormalizeTime";
 
@@ -269,13 +566,11 @@ namespace GoogleDrive
 
         private DriveService driveService;
         private SlidesService slidesService;
-        private static string[] Scopes = { DriveService.Scope.DriveMetadata, DriveService.Scope.DriveReadonly, SlidesService.Scope.Presentations };
+        private SheetsService sheetService;
+        private ScriptService scriptService;
+
+        private static string[] Scopes = { DriveService.Scope.DriveMetadata, DriveService.Scope.Drive, DriveService.Scope.DriveFile, SlidesService.Scope.Presentations, SheetsService.Scope.Spreadsheets};
         private static string ApplicationName = "Google Drive";
-        private JsonSerializer jsonSerializer;
-        private string foldersFilter;
-        private readonly int pathStartLevel;
-        private readonly string pathSeparator;
-        private readonly string folderNameSeparator;
 
         private readonly Link lastSlidelink;
         private readonly Link nextSlidelink;
@@ -335,7 +630,7 @@ namespace GoogleDrive
                     new FileDataStore(credPath, true)).Result;
             }
 
-            // Create Drive, Slides API services.
+            // Create Drive, Slides, Sheets, Scripts API services.
             driveService = new DriveService(new BaseClientService.Initializer()
             {
                 HttpClientInitializer = credential,
@@ -348,28 +643,24 @@ namespace GoogleDrive
                 ApplicationName = ApplicationName,
             });
 
+            sheetService = new SheetsService(new BaseClientService.Initializer()
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = ApplicationName,
+            });
+
+            scriptService = new ScriptService(new BaseClientService.Initializer()
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = ApplicationName,
+            });
+
             #endregion
 
-            #region Try load presentations list from local cache
+            #region Cache
 
-            jsonSerializer = new JsonSerializer();
-
-            // deserialize JSON directly from a file
-            if (File.Exists(ConfigurationManager.AppSettings["PresentationsListCache"]))
-            {
-                using (StreamReader file = File.OpenText(ConfigurationManager.AppSettings["PresentationsListCache"]))
-                {
-                    Cache = (Cache)jsonSerializer.Deserialize(file, typeof(Cache));
-                }
-            }
-            else
-            {
-                Cache = new Cache();
-            }
-
-            pathStartLevel = Convert.ToInt32(ConfigurationManager.AppSettings["PathStartLevel"]);
-            pathSeparator = ConfigurationManager.AppSettings["PathSeparator"];
-            folderNameSeparator = ConfigurationManager.AppSettings["FolderNameSeparator"];
+            TeacherCache = Cache.Load(driveService, "Teacher");
+            StudentsCache = Cache.Load(driveService, "Students");
 
             #endregion
 
@@ -416,184 +707,37 @@ namespace GoogleDrive
             #endregion
 
         }
+
+        private void TeacherCache_BeforeBuildingCache(object sender, EventArgs e)
+        {
+            throw new NotImplementedException();
+        }
         #endregion
 
         #region Properties
 
-        /// <summary>
-        /// Returns the presentations list
-        /// </summary>
-        public Cache Cache { get; private set; }
+        public Cache TeacherCache { get; private set; }
+        public Cache StudentsCache { get; private set; }
 
         #endregion
 
         #region Methods
 
         /// <summary>
-        /// Clears the cache
-        /// </summary>
-        public void ClearCache()
-        {
-            Cache = new Cache();
-        }
-
-        /// <summary>
-        /// Build recursivelly a list of all presentations to work on
-        /// </summary>
-        /// <param name="rootFolderId"></param>
-        public void BuildPresentationsList(string rootFolderId, bool isTop, CacheFolder parentFolder)
-        {
-            string filter = "'" + rootFolderId + "' in parents AND (mimeType = 'application/vnd.google-apps.folder') AND trashed=false";
-            string pageToken = null;
-
-            if (isTop)
-            {
-                foldersFilter = string.Empty;
-            }
-            do
-            {
-                var folderRequest = driveService.Files.List();
-                folderRequest.Q = filter;
-                folderRequest.Spaces = "drive";
-                folderRequest.Fields = "nextPageToken, files(id)";
-                folderRequest.PageToken = pageToken;
-                var folderResult = folderRequest.Execute();
-                foreach (var folder in folderResult.Files)
-                {
-                    if (foldersFilter == string.Empty)
-                    {
-                        foldersFilter += "(";
-                    }
-                    else
-                    {
-                        foldersFilter += " or ";
-                    }
-                    foldersFilter += "'" + folder.Id + "' in parents";
-
-                    var newFolder = new CacheFolder(folder.Id, GetFolderName(folder.Id), parentFolder?.FolderId);
-                    if (parentFolder == null)
-                    {
-                        newFolder.Level = 1;
-                        Cache.Folders.Add(newFolder.FolderId, newFolder);
-                    }
-                    else
-                    {
-                        parentFolder.Folders.Add(newFolder.FolderId, newFolder);
-                        newFolder.Level = parentFolder.Level + 1;
-                    }
-
-                    BuildPresentationsList(folder.Id, false, newFolder);
-                }
-                pageToken = folderResult.NextPageToken;
-            } while (pageToken != null);
-
-            if (isTop)
-            {
-                if (foldersFilter == string.Empty)
-                {
-                    //No folders in root folder - just files
-                    foldersFilter = "('" + rootFolderId + "' in parents) ";
-                }
-                else
-                {
-                    foldersFilter += ")";
-                }
-                filter = foldersFilter + " AND (mimeType = 'application/vnd.google-apps.presentation') AND trashed=false";
-                do
-                {
-                    var filesRequest = driveService.Files.List();
-                    filesRequest.Q = filter;
-                    filesRequest.Spaces = "drive";
-                    filesRequest.Fields = "nextPageToken, files(id, name, parents)";
-                    filesRequest.PageToken = pageToken;
-                    var fileResult = filesRequest.Execute();
-
-                    foreach (var file in fileResult.Files)
-                    {
-                        //If file is filed in more than 1 folder, add it only under the first folder
-                        //For the sake of this program - each presentation should be processed only once
-                        Cache.AddPresentationToFolder(file.Parents[0], file.Id, file.Name);
-                    }
-                    pageToken = fileResult.NextPageToken;
-                } while (pageToken != null);
-            }
-        }
-
-        /// <summary>
-        /// Process the cache:
-        /// Add path to folders starting at "PathStartLevel" in config
-        /// </summary>
-        public void BuildFoldersPath(Dictionary<string, CacheFolder> root, string parentPath)
-        {
-            foreach (var folderKey in root.Keys)
-            {
-                if (root[folderKey].Level >= pathStartLevel)
-                {
-                    if (parentPath == string.Empty)
-                    {
-                        root[folderKey].Path = NormalizeFolderName(root[folderKey].FolderName);
-                    }
-                    else
-                    {
-                        root[folderKey].Path = parentPath + pathSeparator + NormalizeFolderName(root[folderKey].FolderName);
-                    }
-                    foreach (var presentation in root[folderKey].Presentations)
-                    {
-                        presentation.FooterText = root[folderKey].Path;
-                    }
-                }
-                BuildFoldersPath(root[folderKey].Folders, root[folderKey].Path);
-            }
-        }
-
-        /// <summary>
-        /// Save presentations list to local cache file
-        /// </summary>
-        public void SaveCache()
-        {
-            var outputFileName = ConfigurationManager.AppSettings["PresentationsListCache"];
-            if (File.Exists(outputFileName))
-            {
-                File.Delete(outputFileName);
-            }
-            Cache.DateCreated = DateTime.Now.ToString();
-            jsonSerializer.Converters.Add(new JavaScriptDateTimeConverter());
-            jsonSerializer.NullValueHandling = NullValueHandling.Ignore;
-            using (StreamWriter sw = new StreamWriter(outputFileName))
-            using (JsonWriter writer = new JsonTextWriter(sw))
-            {
-                jsonSerializer.Serialize(writer, Cache);
-            }
-
-        }
-
-        /// <summary>
-        /// Gets folder name using folder id
-        /// </summary>
-        /// <param name="folderId"></param>
-        /// <returns></returns>
-        public string GetFolderName(string folderId)
-        {
-            var folderRequest = driveService.Files.Get(folderId);
-            var folder = folderRequest.Execute();
-            return folder.Name;
-        }
-
-        /// <summary>
         /// Process all the presentations in a root folder and its sub folders
         /// </summary>
         /// <param name="rootFolder"></param>
-        public void ProcessFolderPresentations(CacheFolder rootFolder)
+        public void ProcessTeacherPresentations(CacheFolder rootFolder)
         {
             foreach (var cachePresentation in rootFolder.Presentations)
             {
-                ProcessPresentation(cachePresentation);
+                ProcessTeacherPresentation(cachePresentation);
 
             }
             //Process presentations in all subfolders
             foreach (var cachedFolderKey in rootFolder.Folders.Keys)
             {
-                ProcessFolderPresentations(rootFolder.Folders[cachedFolderKey]);
+                ProcessTeacherPresentations(rootFolder.Folders[cachedFolderKey]);
             }
         }
 
@@ -608,7 +752,7 @@ namespace GoogleDrive
         /// 3) For the last slide: add "TOC": a link to each slide (except this last slide)
         /// </summary>
         /// <param name="presentationId"></param>
-        public void ProcessPresentation(CachePresentation cachePresentation)
+        public void ProcessTeacherPresentation(CachePresentation cachePresentation)
         {
             try
             {
@@ -616,6 +760,9 @@ namespace GoogleDrive
 
                 string objectId;
                 int currentStartIndex;
+                var slideFooterCreated = false;
+                var slidePageIdCreated = false;
+                var desiredFooter = cachePresentation.FooterText + "\n";
 
                 #endregion
 
@@ -676,47 +823,6 @@ namespace GoogleDrive
 
                 for (var i = 0; i < presentation.Slides.Count - 1; i++)
                 {
-                    #region Spearker notes slide
-
-                    currentStartIndex = 0;
-                    var notesPage = presentation.Slides[i].SlideProperties.NotesPage;
-                    if (notesPage.PageElements.Count != 2 ||
-                        notesPage.PageElements[1].Shape == null ||
-                        notesPage.PageElements[1].Shape.Text == null ||
-                        notesPage.PageElements[1].Shape.Text.TextElements == null ||
-                        notesPage.PageElements[1].Shape.Text.TextElements.Count != 9)
-                    {
-                        objectId = notesPage.PageElements[1].ObjectId;
-                        myBatchRequest.AddDeleteTextRequest(objectId, notesPage.PageElements[1].Shape);
-
-                        //Add buttons
-                        myBatchRequest.AddInsertTextRequest(objectId, firstSlideText, currentStartIndex);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + firstSlideText.Length - 1, firstSlidelink, false);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + firstSlideText.Length - 1, currentStartIndex + firstSlideText.Length, null, false);
-                        currentStartIndex += firstSlideText.Length;
-
-                        //Prev
-                        myBatchRequest.AddInsertTextRequest(objectId, prevSlideText, currentStartIndex);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + prevSlideText.Length - 1, prevSlidelink, false);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + prevSlideText.Length - 1, currentStartIndex + prevSlideText.Length, null, false);
-                        currentStartIndex += prevSlideText.Length;
-
-                        //Next
-                        myBatchRequest.AddInsertTextRequest(objectId, nextSlideText, currentStartIndex);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + nextSlideText.Length - 1, nextSlidelink, false);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + nextSlideText.Length - 1, currentStartIndex + nextSlideText.Length, null, false);
-                        currentStartIndex += nextSlideText.Length;
-
-                        //Last
-                        myBatchRequest.AddInsertTextRequest(objectId, lastSlideText, currentStartIndex);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex, currentStartIndex + lastSlideText.Length - 1, lastSlidelink, false);
-                        myBatchRequest.AddUpdateTextStyleRequest(objectId, "SpeakerNotesTextStyle", speakerNotesTextStyleFields, currentStartIndex + lastSlideText.Length - 1, currentStartIndex + lastSlideText.Length, null, false);
-                        currentStartIndex += lastSlideText.Length;
-
-                        myBatchRequest.AddUpdateParagraphStyleRequest(objectId, false);
-                    }
-
-                    #endregion
 
                     #region Align Image (if single) - and not in place
 
@@ -742,90 +848,26 @@ namespace GoogleDrive
 
                     #region Process Text Boxes: Header/Footer/Slide Id
 
-                    var slideHeaderIndex = -1;
-                    var slideFooterIndex = -1;
-                    var slidePageIdIndex = -1;
-                    var slideFooterCreated = false;
-                    var slidePageIdCreated = false;
+                    var parsedSlideTextElements = ParseSlideTextElements(presentation.Slides[i]);
 
-                    for (var j = 0; j < presentation.Slides[i].PageElements.Count; j++)
+                    if (parsedSlideTextElements.Header != null && 
+                        parsedSlideTextElements.Header.Text != null &&
+                        parsedSlideTextElements.Header.Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader)
+                        )
                     {
-                        if (presentation.Slides[i].PageElements[j].Shape != null &&
-                            presentation.Slides[i].PageElements[j].Shape.ShapeType == "TEXT_BOX")
-                        {
-                            //Found the header object
-                            if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
-                                presentation.Slides[i].PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY &&
-                                presentation.Slides[i].PageElements[j].Transform.TranslateX == slideHeaderTransform.TranslateX &&
-                                presentation.Slides[i].PageElements[j].Transform.TranslateY == slideHeaderTransform.TranslateY)
-
-                            {
-                                slideHeaderIndex = j;
-                            }
-
-                            //Found the page id object
-                            else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
-                                     presentation.Slides[i].PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY &&
-                                     presentation.Slides[i].PageElements[j].Transform.TranslateX == slideFooterTransform.TranslateX &&
-                                     presentation.Slides[i].PageElements[j].Transform.TranslateY == slideFooterTransform.TranslateY)
-
-                            {
-                                slideFooterIndex = j;
-                            }
-
-                            //Found the page id object
-                            else if (presentation.Slides[i].PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
-                                     presentation.Slides[i].PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY &&
-                                     presentation.Slides[i].PageElements[j].Transform.TranslateX == slidePageIdTransform.TranslateX &&
-                                     presentation.Slides[i].PageElements[j].Transform.TranslateY == slidePageIdTransform.TranslateY)
-
-                            {
-                                if (presentation.Slides[i].PageElements[j].Shape.Text == null ||
-                                    presentation.Slides[i].PageElements[j].Shape.Text.TextElements == null ||
-                                    presentation.Slides[i].PageElements[j].Shape.Text.TextElements.Count < 2 ||
-                                    presentation.Slides[i].PageElements[j].Shape.Text.TextElements[1].TextRun == null)
-                                {
-                                    //An empty text box at the location of the page id - delete it
-                                    myBatchRequest.AddDeleteObjectRequest(presentation.Slides[i].PageElements[j].ObjectId);
-                                }
-                                else
-                                {
-                                    //This is the page id text box
-                                    slidePageIdIndex = j;
-                                }
-                            }
-                        }
-                    }
-
-                    string desiredPageId = (i + 1).ToString();
-                    string desiredFooter = cachePresentation.FooterText + "\n";
-
-                    //Header
-                    if (slideHeaderIndex >= 0 &&
-                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape != null &&
-                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text != null &&
-                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements != null &&
-                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements.Count > 1 &&
-                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun != null &&
-                        presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content != null)
-                    {
-                        //Header text box exists - check if text contains search text in config
-                        if (presentation.Slides[i].PageElements[slideHeaderIndex].Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader))
-                        {
-                            PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader)));
-                        }
+                        PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader)));
                     }
 
                     //Footer - exclude last 2 slides (homework + toc)
                     if (i < presentation.Slides.Count - 2)
                     {
-                        if (slideFooterIndex >= 0)
+                        if (parsedSlideTextElements.Footer != null)
                         {
-                            //Footer text box exists - update only if different
-                            if (presentation.Slides[i].PageElements[slideFooterIndex].Shape.Text.TextElements[1].TextRun.Content != desiredFooter)
+                            if (parsedSlideTextElements.Footer.Text == null || parsedSlideTextElements.Footer.Text != desiredFooter)
+                                //Footer text box exists - update only if null or different
                             {
-                                myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, presentation.Slides[i].PageElements[slideFooterIndex].Shape);
-                                myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slideFooterIndex].ObjectId, desiredFooter, 0);
+                                myBatchRequest.AddDeleteTextRequest(parsedSlideTextElements.Footer.ObjectId, parsedSlideTextElements.Footer.Shape);
+                                myBatchRequest.AddInsertTextRequest(parsedSlideTextElements.Footer.ObjectId, desiredFooter, 0);
                             }
                         }
                         else
@@ -836,19 +878,31 @@ namespace GoogleDrive
                         }
                     }
 
+
+                    string desiredPageId = (i + 1).ToString();
+
                     //Page Id
-                    if (slidePageIdIndex >= 0)
+                    if (parsedSlideTextElements.SlidePageId != null)
                     {
-                        //Page Id text box exists - update only if different
-                        if (presentation.Slides[i].PageElements[slidePageIdIndex].Shape.Text.TextElements[1].TextRun.Content != desiredPageId)
+                        if (parsedSlideTextElements.SlidePageId.Text == null)
                         {
-                            myBatchRequest.AddDeleteTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, presentation.Slides[i].PageElements[slidePageIdIndex].Shape);
-                            myBatchRequest.AddInsertTextRequest(presentation.Slides[i].PageElements[slidePageIdIndex].ObjectId, desiredPageId, 0);
+                            //An empty text box at the location of the page id - delete it
+                            myBatchRequest.AddDeleteObjectRequest(parsedSlideTextElements.SlidePageId.ObjectId);
+                        }
+                        else
+                        {
+                            //Text exists
+                            if (parsedSlideTextElements.SlidePageId.Text != desiredPageId)
+                            {
+                                //Page Id text box exists - update only if different
+                                myBatchRequest.AddDeleteTextRequest(parsedSlideTextElements.SlidePageId.ObjectId, parsedSlideTextElements.SlidePageId.Shape);
+                                myBatchRequest.AddInsertTextRequest(parsedSlideTextElements.SlidePageId.ObjectId, desiredPageId, 0);
+                            }
                         }
                     }
                     else
                     {
-                        //Create a new text box to hold the slide number
+                        //Page Id text box does not exist - create a new text box to hold the slide number
                         myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slidePageIdSize, slidePageIdTransform);
                         slidePageIdCreated = true;
                     }
@@ -963,12 +1017,153 @@ namespace GoogleDrive
         }
 
         /// <summary>
+        /// Process students presentations
+        /// </summary>
+        public void ProcessStudentsPresentations()
+        {
+            //Get teachers pid
+            var classId = "806";
+
+             //Read spreadsheet range
+            var spreadsheetId = "1O79CJuf80wfTP7ZxJ4xqiWsUMydKMcGkRs5TIq5p54E";
+            var range = classId + "!A2:D2";
+            var request = sheetService.Spreadsheets.Values.Get(spreadsheetId, range);
+            request.ValueRenderOption = SpreadsheetsResource.ValuesResource.GetRequest.ValueRenderOptionEnum.FORMULA;
+            var teachersPresentationList = request.Execute();
+
+            var regexExtractId = new Regex("id=([^\"]+)");
+            var regexExtractName = new Regex(",\"([^\"]+)");
+
+            var teacherMainFolderRawData = teachersPresentationList.Values[0][0];
+            var teacherMainFolderId = regexExtractId.Match(teacherMainFolderRawData.ToString()).Groups[1].Value;
+            var teacherMainFolderName = regexExtractName.Match(teacherMainFolderRawData.ToString()).Groups[1].Value;
+
+            var teacherSubFolderRawData = teachersPresentationList.Values[0][1];
+            var teacherSubFolderId = regexExtractId.Match(teacherSubFolderRawData.ToString()).Groups[1].Value;
+            var teacherSubFolderName = regexExtractName.Match(teacherSubFolderRawData.ToString()).Groups[1].Value;
+
+            var teacherPresentationIdRawData = teachersPresentationList.Values[0][3];
+            var teacherPresentationId = regexExtractId.Match(teacherPresentationIdRawData.ToString()).Groups[1].Value;
+            var teacherPresentationName = regexExtractName.Match(teacherPresentationIdRawData.ToString()).Groups[1].Value;
+
+            //Check to create drive hierarchy in students folders
+            var studentsCacheTopFolder = StudentsCache.GetSubFolder(classId);
+            var studentsMainFolder = studentsCacheTopFolder.GetSubFolderByName(teacherMainFolderName);
+
+            if (studentsMainFolder == null)
+            {
+                //Create drive folder for the students main folder
+                var newFolder = new Google.Apis.Drive.v3.Data.File
+                {
+                    MimeType = StudentsCache.GetFolderMimeType(),
+                    Name = teacherMainFolderName                   
+                };
+                newFolder.Parents = new List<string>
+                {
+                    studentsCacheTopFolder.FolderId
+                };
+                var createFolderRequest = driveService.Files.Create(newFolder);
+                var newDriveFolder = createFolderRequest.Execute();
+
+                //Add also to the local cache
+                studentsMainFolder = new CacheFolder(newDriveFolder.Id, teacherMainFolderName, studentsCacheTopFolder.FolderId);
+                studentsCacheTopFolder.Folders.Add(newDriveFolder.Id, studentsMainFolder);
+            }
+
+            var studentsSubFolder = studentsMainFolder.GetSubFolderByName(teacherSubFolderName);
+
+            string studentsPresentationId = string.Empty;
+            if (studentsSubFolder == null)
+            {
+                //Create drive folder for the students sub folder
+                var newFolder = new Google.Apis.Drive.v3.Data.File
+                {
+                    MimeType = StudentsCache.GetFolderMimeType(),
+                    Name = teacherSubFolderName
+                };
+                newFolder.Parents = new List<string>
+                {
+                    studentsMainFolder.FolderId
+                };
+                var createFolderRequest = driveService.Files.Create(newFolder);
+                var newDriveFolder = createFolderRequest.Execute();
+
+                //Add also to the local cache
+                studentsSubFolder = new CacheFolder(newDriveFolder.Id, teacherSubFolderName, studentsMainFolder.FolderId);
+                studentsMainFolder.Folders.Add(newDriveFolder.Id, studentsSubFolder);
+
+                //Create an empty presentation in this SubFolder and update spreadsheet to point to that presentation
+                //Create drive folder for the students sub folder
+                var newStudentPresentation = new Google.Apis.Drive.v3.Data.File
+                {
+                    MimeType = StudentsCache.GetPresentationMimeType(),
+                    Name = teacherPresentationName
+                };
+                newStudentPresentation.Parents = new List<string>
+                {
+                    studentsSubFolder.FolderId
+                };
+                var createFileRequest = driveService.Files.Create(newStudentPresentation);
+                var newDriveFile = createFileRequest.Execute();
+
+                studentsPresentationId = newDriveFile.Id;
+
+                //Add the presentation to the cache
+                studentsSubFolder.AddPresentation(newDriveFile.Id, teacherPresentationName);
+
+                //Update the spreadsheet
+                ValueRange requestBody = new ValueRange();
+                var list = new List<object>
+                {
+                    string.Format("=HYPERLINK(\"https://drive.google.com/open?id={0}\",\"{1}\")" ,newDriveFile.Id, "מצגת תלמידים")
+                };
+                requestBody.Values = new List<IList<Object>> { list };
+                var updateSheetRequest = sheetService.Spreadsheets.Values.Update(requestBody, spreadsheetId, "806!E2");
+                updateSheetRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+                requestBody.MajorDimension = "ROWS";
+                updateSheetRequest.Execute();
+            }
+
+            //Get the teachers presentation
+            var teachersPresentationRequest = slidesService.Presentations.Get(teacherPresentationId);
+            var teachersPresentation = teachersPresentationRequest.Execute();
+
+            //Check which slides to copy
+            List<int> slidesToCopy = new List<int>();
+            var regexMatchTeachingSlide = new Regex("(שיעורי בית|עמוד|תרגיל)");
+            for(var i=0; i < teachersPresentation.Slides.Count; i++)
+            {
+                var parseSlideTextElements = ParseSlideTextElements(teachersPresentation.Slides[i]);
+                if (parseSlideTextElements.Header != null && parseSlideTextElements.Header.Text != null && !regexMatchTeachingSlide.IsMatch(parseSlideTextElements.Header.Text))
+                {
+                    //Teaching slide
+                    slidesToCopy.Add(i);
+                }
+            }
+
+            var scriptExecutionBody = new ExecutionRequest
+            {
+                Parameters = new List<Object>() { teacherPresentationId, studentsPresentationId, slidesToCopy.ToArray()},
+                Function = "copySlides"
+            };
+
+            var scriptRunRequest = scriptService.Scripts.Run(scriptExecutionBody, "MboWOtv3Dz9dOSLTa2xlm8NEC8Wrwpzrq");
+            var scriptResult = scriptRunRequest.Execute();
+
+
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        /// <summary>
         /// Exports and Download the presentation as a Microsoft Powerpoint file (.pptx) and validates each slide:
         /// if a slide contains at least one image object (without a border, e.g. a question) - 
         /// it must contain animations if there are text boxes or lines/arrows
         /// </summary>
         /// <param name="cachePresentation"></param>
-        public void ValidatePresentationAnimations(CachePresentation cachePresentation)
+        private void ValidatePresentationAnimations(CachePresentation cachePresentation)
         {
             bool slideHasStudentQuestion;
             bool slideHasSolution;
@@ -1016,36 +1211,91 @@ namespace GoogleDrive
             }
             localPresentation.Close();
 
-            File.Delete(exportPath);
+            System.IO.File.Delete(exportPath);
+        }
+
+        /// <summary>
+        /// Retrives text from a shape page element
+        /// </summary>
+        /// <param name="shape"></param>
+        /// <returns></returns>
+        private string GetTextFromShape(Google.Apis.Slides.v1.Data.Shape shape)
+        {
+            if (shape != null &&
+                shape.Text != null &&
+                shape.Text.TextElements != null &&
+                shape.Text.TextElements.Count > 1 &&
+                shape.Text.TextElements[1].TextRun != null &&
+                shape.Text.TextElements[1].TextRun.Content != null)
+            {
+                return shape.Text.TextElements[1].TextRun.Content;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Parses the slide and looks for the Header/Footer/PageId text boxes
+        /// </summary>
+        /// <param name="slide"></param>
+        /// <returns></returns>
+        private SlideParsedTextElements ParseSlideTextElements(Page slide)
+        {
+            var slideParsedTextElements = new SlideParsedTextElements();
+
+            for (var j = 0; j < slide.PageElements.Count; j++)
+            {
+                if (slide.PageElements[j].Shape != null &&
+                    slide.PageElements[j].Shape.ShapeType == "TEXT_BOX")
+                {
+                    //Found the header object
+                    if (slide.PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
+                        slide.PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY &&
+                        slide.PageElements[j].Transform.TranslateX == slideHeaderTransform.TranslateX &&
+                        slide.PageElements[j].Transform.TranslateY == slideHeaderTransform.TranslateY)
+
+                    {
+                        slideParsedTextElements.Header = new SlideParsedTextElement(slide.PageElements[j].ObjectId, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Shape);
+                    }
+
+                    //Found the footer object
+                    else if (slide.PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
+                             slide.PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY &&
+                             slide.PageElements[j].Transform.TranslateX == slideFooterTransform.TranslateX &&
+                             slide.PageElements[j].Transform.TranslateY == slideFooterTransform.TranslateY)
+
+                    {
+                        slideParsedTextElements.Footer = new SlideParsedTextElement(slide.PageElements[j].ObjectId, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Shape);
+                    }
+
+                    //Found the page id object
+                    else if (slide.PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
+                             slide.PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY &&
+                             slide.PageElements[j].Transform.TranslateX == slidePageIdTransform.TranslateX &&
+                             slide.PageElements[j].Transform.TranslateY == slidePageIdTransform.TranslateY)
+
+                    {
+                        if (slide.PageElements[j].Shape.Text == null ||
+                            slide.PageElements[j].Shape.Text.TextElements == null ||
+                            slide.PageElements[j].Shape.Text.TextElements.Count < 2 ||
+                            slide.PageElements[j].Shape.Text.TextElements[1].TextRun == null)
+                        {
+                            slideParsedTextElements.SlidePageId = new SlideParsedTextElement(slide.PageElements[j].ObjectId, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Shape);
+                        }
+                    }
+                }
+            }
+
+            return slideParsedTextElements;
         }
 
         #endregion
-    
+
         #region Events
 
         public event EventHandler PresentationProcessed;
         public event EventHandler PresentationSkipped;
         public event EventHandler PresentationError;
-
-        #endregion
-
-        #region Private Methods
-
-        /// <summary>
-        /// Returns a normalized folder name - everything AFTER the folderNameSeparator in config (usually ".")
-        /// </summary>
-        /// <param name="folderName"></param>
-        /// <returns></returns>
-        private string NormalizeFolderName(string folderName)
-        {
-            if (!folderName.Contains(folderNameSeparator))
-            {
-                return folderName.Trim();
-            }
-
-            var splitArray = folderName.Split(folderNameSeparator.ToCharArray());
-            return splitArray[splitArray.Length - 1].Trim();
-        }
 
         #endregion
     }
@@ -1070,7 +1320,7 @@ namespace GoogleDrive
             this.slidesService = slidesService;
             batchUpdatePresentationRequest = new BatchUpdatePresentationRequest
             {
-                Requests = new List<Request>()
+                Requests = new List<Google.Apis.Slides.v1.Data.Request>()
             };
             this.presentationId = presentationId;
         }
@@ -1082,7 +1332,7 @@ namespace GoogleDrive
         /// </summary>
         public void AddCreateSlideRequest(int insertionIndex)
         {
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 CreateSlide = new CreateSlideRequest()
                 {
@@ -1105,7 +1355,7 @@ namespace GoogleDrive
                 return;
             }
 
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 DeleteText = new DeleteTextRequest()
                 {
@@ -1124,7 +1374,7 @@ namespace GoogleDrive
         /// <param name="objectId"></param>
         public void AddInsertTextRequest(string objectId, string text, int insertionIndex)
         {
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 InsertText = new InsertTextRequest()
                 {
@@ -1157,7 +1407,7 @@ namespace GoogleDrive
                 fields += ",underline";
             }
 
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 UpdateTextStyle = new UpdateTextStyleRequest()
                 {
@@ -1191,7 +1441,7 @@ namespace GoogleDrive
             }
             var fields = ConfigurationManager.AppSettings["ParagraphStyleFields"];
 
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 UpdateParagraphStyle = new UpdateParagraphStyleRequest()
                 {
@@ -1215,7 +1465,7 @@ namespace GoogleDrive
         /// <param name="transform"></param>
         public void AddCreateShapeRequest(string pageObjectId, Size size, AffineTransform transform)
         {
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 CreateShape = new CreateShapeRequest()
                 {
@@ -1255,7 +1505,7 @@ namespace GoogleDrive
                 return;
             }
 
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 UpdatePageElementTransform = new UpdatePageElementTransformRequest()
                 {
@@ -1279,7 +1529,7 @@ namespace GoogleDrive
         /// <param name="objectId"></param>
         public void AddDeleteObjectRequest(string objectId)
         {
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 DeleteObject = new DeleteObjectRequest()
                 {
@@ -1295,7 +1545,7 @@ namespace GoogleDrive
         /// <param name="replaceText"></param>
         public void AddReplaceAllTextRequest(string searchText, string replaceText)
         {
-            batchUpdatePresentationRequest.Requests.Add(new Request()
+            batchUpdatePresentationRequest.Requests.Add(new Google.Apis.Slides.v1.Data.Request()
             {
                 ReplaceAllText = new ReplaceAllTextRequest()
                 {
@@ -1330,11 +1580,58 @@ namespace GoogleDrive
         /// </summary>
         public void ClearRequests()
         {
-            batchUpdatePresentationRequest.Requests = new List<Request>();
+            batchUpdatePresentationRequest.Requests = new List<Google.Apis.Slides.v1.Data.Request>();
         }
         #endregion
     }
 
     #endregion
-        
+
+    #region Class SlideParsedTextElement
+
+    public class SlideParsedTextElement
+    {
+        #region Properties
+
+        public string ObjectId { get; private set; }
+        public string Text { get; private set; }
+        public Google.Apis.Slides.v1.Data.Shape Shape {get; private set; }
+
+        #endregion
+
+        #region C'Tor/Dtor
+        public SlideParsedTextElement(string objectId, string text, Google.Apis.Slides.v1.Data.Shape shape)
+        {
+            ObjectId = objectId;
+            Shape = shape;
+            Text = text;
+        }
+        #endregion
+    }
+
+    #endregion
+
+    #region Class SlideParsedTextElements
+
+    public class SlideParsedTextElements
+    {
+        #region Properties
+
+        public SlideParsedTextElement Header { get; set; }
+        public SlideParsedTextElement Footer { get; set; }
+        public SlideParsedTextElement SlidePageId { get; set; }
+
+        #endregion
+
+        #region C'Tor/Dtor
+
+        public SlideParsedTextElements()
+        {
+        }
+
+        #endregion
+    }
+
+    #endregion
+
 }
