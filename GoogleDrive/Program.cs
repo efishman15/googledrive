@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Configuration;
-using Microsoft.Office.Interop.PowerPoint;
-using Microsoft.Office.Core;
 
 namespace GoogleDrive
 {
@@ -83,6 +81,8 @@ namespace GoogleDrive
 
                     #region Process specfic presentation
 
+                    LogOutputWithNewLine(string.Format("Processing specific teacher presentation: {0}", presentationId));
+
                     var cachePresentation = drive.TeacherCache.GetPresentation(presentationId, drive.TeacherCache.Folders);
                     if (cachePresentation != null)
                     {
@@ -111,16 +111,16 @@ namespace GoogleDrive
                             //Specified folder id not found in cache
                             PrintUsageAndExit(3);
                         }
-                        LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
+                        LogOutputWithNewLine(string.Format("Processing {0} teacher presentations in folder: {1}", rootFolder.TotalPresentations, rootFolder.FolderName));
 
                         drive.ProcessTeacherPresentations(rootFolder);
                     }
                     else
                     {
-                        LogOutputWithNewLine(string.Format("Processing {0} presentations", drive.TeacherCache.TotalPresentations));
+                        LogOutputWithNewLine(string.Format("Processing {0} teacher presentations", drive.TeacherCache.TotalPresentations));
                         foreach (var folderKey in drive.TeacherCache.Folders.Keys)
                         {
-                            LogOutputWithNewLine(string.Format("Processing {0} presentations in folder: {1}", drive.TeacherCache.Folders[folderKey].TotalPresentations, drive.TeacherCache.Folders[folderKey].FolderName));
+                            LogOutputWithNewLine(string.Format("Processing {0} teacher presentations in folder: {1}", drive.TeacherCache.Folders[folderKey].TotalPresentations, drive.TeacherCache.Folders[folderKey].FolderName));
                             drive.ProcessTeacherPresentations(drive.TeacherCache.Folders[folderKey]);
                         }
                     }
@@ -131,6 +131,7 @@ namespace GoogleDrive
 
                 case ProcessingType.STUDENTS:
 
+                    LogOutputWithNewLine("Processing student presentations...");
                     drive.ProcessStudentsPresentations();
                     break;
             }
@@ -168,10 +169,10 @@ namespace GoogleDrive
 
         private static void PrintUsageAndExit(int exitCode)
         {
-            Console.WriteLine("GoogleDrive [/?] [/RefreshList] [/RootFolderId=<FolderId>] [/Id=<PresentationId>]");
+            Console.WriteLine("GoogleDrive [/?] [/RootFolderId=<FolderId>] [/Id=<PresentationId>] [/Students]");
             Console.WriteLine("Only one of the parameters can be specified at a time:");
-            Console.WriteLine("/RootFolderId    Process only this Root Folder and its subfolders");
-            Console.WriteLine("/PresentationId  Skips succeeded presentations");
+            Console.WriteLine("/RootFolderId    Process only teacher presentations from this Root Folder and its subfolders");
+            Console.WriteLine("/PresentationId  Process only this teacher presentation");
             Console.WriteLine("/Students        Process students presentations");
             Console.WriteLine("/?               Prints this help");
             Environment.Exit(exitCode);
