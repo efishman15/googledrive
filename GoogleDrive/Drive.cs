@@ -1072,7 +1072,7 @@ namespace GoogleDrive
             foreach (var sheet in masterPlanSpreadsheet.Sheets)
             {
                 if (
-                    (sheet.Properties.Hidden.HasValue && sheet.Properties.Hidden.Value == false) ||
+                    (sheet.Properties.Hidden.HasValue && sheet.Properties.Hidden.Value == true) ||
                     (startFromSheet != null && sheet.Properties.Title != startFromSheet && !inputSheetStarted)
                     )
                 {
@@ -1184,6 +1184,7 @@ namespace GoogleDrive
                     {
                         //Skip this row - no slides to copy
                         rowNumber++;
+                        PresentationSkipped.Invoke(this, null);
                         continue; //To the next row
                     }
                     else
