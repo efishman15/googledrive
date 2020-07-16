@@ -528,7 +528,31 @@ namespace GoogleDrive
 
     #endregion
 
-    #region Class Process Event Args
+    #region Class ProcessFolderEventArgs
+
+    public class ProcessFolderEventArgs : EventArgs
+    {
+        #region Properties
+
+        public string FolderName { get; set; }
+        public int TotalPresentations { get; set; }
+
+        #endregion
+
+        #region C'Tor/D'Tor
+
+        public ProcessFolderEventArgs(string folderName, int totalPresentations)
+        {
+            FolderName = folderName;
+            TotalPresentations = totalPresentations;
+        }
+
+        #endregion
+    }
+
+    #endregion
+
+    #region Class SlideErrorEventArgs
 
     public class SlideErrorEventArgs : EventArgs
     {
@@ -731,7 +755,6 @@ namespace GoogleDrive
             pptPresentations = pptApplication.Presentations;
 
             #endregion
-
         }
 
         private void TeacherCache_BeforeBuildingCache(object sender, EventArgs e)
@@ -755,6 +778,11 @@ namespace GoogleDrive
         /// <param name="rootFolder"></param>
         public void ProcessTeacherPresentations(CacheFolder rootFolder)
         {
+            if (rootFolder.Level == 1)
+            {
+                FolderProcessingStarted.Invoke(this, new ProcessFolderEventArgs(rootFolder.FolderName, rootFolder.TotalPresentations));
+            }
+
             foreach (var cachePresentation in rootFolder.Presentations)
             {
                 ProcessTeacherPresentation(cachePresentation);
@@ -792,11 +820,9 @@ namespace GoogleDrive
 
                 #endregion
 
-                #region Load Presentation As a Drive File
+                #region Load Presentation and check time stamp
 
-                var presentationFileRequest = driveService.Files.Get(cachePresentation.PresentationId);
-                presentationFileRequest.Fields = "appProperties, modifiedTime";
-                var presentationFile = presentationFileRequest.Execute();
+                var presentationFile = LoadPresentationForTimeStampCheck(cachePresentation.PresentationId);
 
                 if (presentationFile.AppProperties == null)
                 {
@@ -807,10 +833,11 @@ namespace GoogleDrive
                     if (presentationFile.ModifiedTime <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
                     {
                         //File was not modified since it was last processed - skip
-                        PresentationSkipped.Invoke(null, null);
+                        PresentationSkipped.Invoke(this, null);
                         return;
                     }
                 }
+
                 #endregion
 
                 #region Load Presentation
@@ -1013,19 +1040,7 @@ namespace GoogleDrive
 
                 #region Mark as processed in app properties
 
-                //Make sure normalize time is always after the modified time (15 seconds after)
-                var normalizeTime = DateTime.Now.AddSeconds(15).ToString();
-                if (!presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
-                {
-                    presentationFile.AppProperties.Add(APP_PROPERTY_NORMALIZE_TIME, normalizeTime);
-                }
-                else
-                {
-                    presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME] = normalizeTime;
-                }
-                var updatePresentationFileRequest = driveService.Files.Update(presentationFile, cachePresentation.PresentationId);
-                updatePresentationFileRequest.Fields = "appProperties";
-                updatePresentationFileRequest.Execute();
+                MarkPresentationAsProcessed(presentationFile, cachePresentation.PresentationId);
 
                 #endregion
 
@@ -1045,24 +1060,37 @@ namespace GoogleDrive
         /// <summary>
         /// Process students presentations
         /// </summary>
-        public void ProcessStudentsPresentations()
+        public void ProcessStudentsPresentations(string startFromSheet = null)
         {
             //Open masterplan spreadsheet
             var masterPlanSpreadsheetRequest = sheetService.Spreadsheets.Get(masterPlanSpreadsheetId);
             var masterPlanSpreadsheet = masterPlanSpreadsheetRequest.Execute();
 
             //Loop through all non-hidden sheets in the masterplan spreadsheet
+
+            bool inputSheetStarted = false;
             foreach (var sheet in masterPlanSpreadsheet.Sheets)
             {
-                if (sheet.Properties.Hidden.HasValue && sheet.Properties.Hidden.Value == false)
+                if (
+                    (sheet.Properties.Hidden.HasValue && sheet.Properties.Hidden.Value == false) ||
+                    (startFromSheet != null && sheet.Properties.Title != startFromSheet && !inputSheetStarted)
+                    )
                 {
                     continue; //To the next sheet
+                }
+
+                if (sheet.Properties.Title == startFromSheet)
+                {
+                    inputSheetStarted = true;
                 }
 
                 //Load sheet data
                 var masterPlanSheetReadValuesRequest = sheetService.Spreadsheets.Values.Get(masterPlanSpreadsheetId, string.Format(masterPlanSpreadsheetReadRangePattern, sheet.Properties.Title));
                 masterPlanSheetReadValuesRequest.ValueRenderOption = SpreadsheetsResource.ValuesResource.GetRequest.ValueRenderOptionEnum.FORMULA;
                 var masterPlanSheetData = masterPlanSheetReadValuesRequest.Execute();
+
+                //Raise event so parent can print sheet summary
+                FolderProcessingStarted.Invoke(this, new ProcessFolderEventArgs(sheet.Properties.Title, masterPlanSheetData.Values.Count));
 
                 //Skip the header line in the sheet
                 int rowNumber = 2;
@@ -1083,7 +1111,7 @@ namespace GoogleDrive
                     var subFolderName = regexSpreadsheetHyperlinkExtractName.Match(row[1].ToString()).Groups[1].Value;
                     var sourcePresentationId = regexSpreadsheetHyperlinkExtractId.Match(row[3].ToString()).Groups[1].Value;
                     var sourcePresentationName = regexSpreadsheetHyperlinkExtractName.Match(row[3].ToString()).Groups[1].Value;
-
+                    Google.Apis.Drive.v3.Data.File targetPresentationDriveFile = null;
                     string targetPresentationId = null;
 
                     if (row[4] != null)
@@ -1102,6 +1130,33 @@ namespace GoogleDrive
                     }
                     prevMainFolderId = mainFolderId;
                     prevSubFolderId = subFolderId;
+
+                    #endregion
+
+                    #region Check time stamps
+
+                    //If the target presentation exists - check if source.modifiedDate > target.appProperties.NormalizeTime
+                    //and if not - skip updating
+                    if (targetPresentationId != null)
+                    {
+                        var sourcePresentationDriveFile = LoadPresentationForTimeStampCheck(sourcePresentationId);
+                        targetPresentationDriveFile = LoadPresentationForTimeStampCheck(targetPresentationId);
+
+                        if (targetPresentationDriveFile.AppProperties == null)
+                        {
+                            targetPresentationDriveFile.AppProperties = new Dictionary<string, string>();
+                        }
+                        if (targetPresentationDriveFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
+                        {
+                            if (sourcePresentationDriveFile.ModifiedTime <= Convert.ToDateTime(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                            {
+                                //Source file was not modified since the target was last processed - skip
+                                PresentationSkipped.Invoke(this, null);
+                                rowNumber++;
+                                continue;
+                            }
+                        }
+                    }
 
                     #endregion
 
@@ -1150,7 +1205,7 @@ namespace GoogleDrive
                     CacheFolder studentsSubFolder;
                     if (subFolderId != mainFolderId)
                     {
-                        studentsSubFolder = CheckToCreateDriveFolder(studentsMainFolder.GetSubFolderByName(mainFolderName), subFolderName);
+                        studentsSubFolder = CheckToCreateDriveFolder(studentsMainFolder, subFolderName);
                     }
                     else
                     {
@@ -1208,12 +1263,23 @@ namespace GoogleDrive
 
                     #endregion
 
-                    //TODO: REMOVE THIS LINE - SAVE ONLY ONCE - IN THE END!!!
-                    StudentsCache.Save();
+                    #region Mark presentation as processed
+
+                    if (targetPresentationDriveFile == null)
+                    {
+                        targetPresentationDriveFile = LoadPresentationForTimeStampCheck(targetPresentationId);
+                    }
+                    MarkPresentationAsProcessed(targetPresentationDriveFile, targetPresentationId);
+
+                    #endregion
 
                     rowNumber++;
                 }
             }
+
+            //During processing, Students cache might have been updated - save it locally
+            StudentsCache.Save();
+
         }
 
         #endregion
@@ -1223,6 +1289,7 @@ namespace GoogleDrive
         public event EventHandler PresentationProcessed;
         public event EventHandler PresentationSkipped;
         public event EventHandler PresentationError;
+        public event EventHandler FolderProcessingStarted;
 
         #endregion
 
@@ -1438,6 +1505,44 @@ namespace GoogleDrive
             updateSheetRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
             valueRange.MajorDimension = "ROWS";
             updateSheetRequest.Execute();
+        }
+
+        /// <summary>
+        /// Loads a presentation as a drive file to compare time stamps
+        /// </summary>
+        /// <param name="presentationId"></param>
+        /// <returns></returns>
+        private Google.Apis.Drive.v3.Data.File LoadPresentationForTimeStampCheck(string presentationId)
+        {
+            var presentationFileRequest = driveService.Files.Get(presentationId);
+            presentationFileRequest.Fields = "appProperties, modifiedTime";
+            return presentationFileRequest.Execute();
+        }
+
+        /// <summary>
+        /// Mark (with a time stamp) in drive that this presentation has been processed
+        /// </summary>
+        /// <param name="presentationFile"></param>
+        private void MarkPresentationAsProcessed(Google.Apis.Drive.v3.Data.File presentationFile, string fileId)
+        {
+            //Make sure normalize time is always after the modified time (15 seconds after)
+            var normalizeTime = DateTime.Now.AddSeconds(15).ToString();
+            if (presentationFile.AppProperties == null)
+            {
+                presentationFile.AppProperties = new Dictionary<string, string>();
+            }
+            if (!presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
+            {
+                presentationFile.AppProperties.Add(APP_PROPERTY_NORMALIZE_TIME, normalizeTime);
+            }
+            else
+            {
+                presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME] = normalizeTime;
+            }
+            var updatePresentationFileRequest = driveService.Files.Update(presentationFile, fileId);
+            updatePresentationFileRequest.Fields = "appProperties";
+            updatePresentationFileRequest.Execute();
+
         }
 
         #endregion
