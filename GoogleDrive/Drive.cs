@@ -1106,9 +1106,9 @@ namespace GoogleDrive
                     #region Parse columns
 
                     var mainFolderId = regexSpreadsheetHyperlinkExtractId.Match(row[0].ToString()).Groups[1].Value;
-                    var mainFolderName = regexSpreadsheetHyperlinkExtractName.Match(row[0].ToString()).Groups[1].Value;
+                    var mainFolderName = ReplaceDoubleQuotesWithSingle(regexSpreadsheetHyperlinkExtractName.Match(row[0].ToString()).Groups[1].Value);
                     var subFolderId = regexSpreadsheetHyperlinkExtractId.Match(row[1].ToString()).Groups[1].Value;
-                    var subFolderName = regexSpreadsheetHyperlinkExtractName.Match(row[1].ToString()).Groups[1].Value;
+                    var subFolderName = ReplaceDoubleQuotesWithSingle(regexSpreadsheetHyperlinkExtractName.Match(row[1].ToString()).Groups[1].Value);
                     var sourcePresentationId = regexSpreadsheetHyperlinkExtractId.Match(row[3].ToString()).Groups[1].Value;
                     var sourcePresentationName = regexSpreadsheetHyperlinkExtractName.Match(row[3].ToString()).Groups[1].Value;
                     Google.Apis.Drive.v3.Data.File targetPresentationDriveFile = null;
@@ -1119,7 +1119,7 @@ namespace GoogleDrive
                         var match = regexSpreadsheetHyperlinkExtractId.Match(row[4].ToString());
                         if (match.Groups != null && match.Groups.Count > 1)
                         {
-                            targetPresentationId = match.Groups[1].Value;
+                            targetPresentationId = ReplaceDoubleQuotesWithSingle(match.Groups[1].Value);
                         }
                     }
 
@@ -1543,6 +1543,21 @@ namespace GoogleDrive
             updatePresentationFileRequest.Fields = "appProperties";
             updatePresentationFileRequest.Execute();
 
+        }
+
+        /// <summary>
+        /// Replaces double quotes with single quotes
+        /// </summary>
+        /// <param name="inputString"></param>
+        /// <returns></returns>
+        private string ReplaceDoubleQuotesWithSingle(string inputString)
+        {
+            if (inputString != null)
+            {
+                return inputString.Replace("\"\"", "\"");
+            }
+
+            return null;
         }
 
         #endregion
