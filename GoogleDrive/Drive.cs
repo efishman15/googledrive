@@ -1040,7 +1040,7 @@ namespace GoogleDrive
 
                 #region Mark as processed in app properties
 
-                MarkPresentationAsProcessed(presentationFile, cachePresentation.PresentationId);
+                MarkPresentationAsProcessed(presentationFile);
 
                 #endregion
 
@@ -1098,7 +1098,7 @@ namespace GoogleDrive
                 //Variables to allow zeroing counter of files in a folder
                 var prevMainFolderId = string.Empty;
                 var prevSubFolderId = string.Empty;
-                var currentFileNumberInFolder = 0;
+                var currentFileNumberInFolder = 1;
 
                 //Loop through the rows - each row represents a presentation to process
                 foreach (var row in masterPlanSheetData.Values)
@@ -1126,10 +1126,14 @@ namespace GoogleDrive
                     //Check if main folder or sub folder has changed - start file counter
                     if (mainFolderId != prevMainFolderId || subFolderId != prevSubFolderId)
                     {
-                        currentFileNumberInFolder = 0;
+                        currentFileNumberInFolder = 1;
                     }
                     prevMainFolderId = mainFolderId;
                     prevSubFolderId = subFolderId;
+
+                    var targetPresentationName = string.Format("{0:00}. {1}", currentFileNumberInFolder, sourcePresentationName);
+                    //Replace double quotes to single quotes
+                    targetPresentationName = targetPresentationName.Replace("\"\"", "\"");
 
                     #endregion
 
@@ -1137,10 +1141,17 @@ namespace GoogleDrive
 
                     //If the target presentation exists - check if source.modifiedDate > target.appProperties.NormalizeTime
                     //and if not - skip updating
+
                     if (targetPresentationId != null)
                     {
+                        currentFileNumberInFolder++;
                         var sourcePresentationDriveFile = LoadPresentationForTimeStampCheck(sourcePresentationId);
                         targetPresentationDriveFile = LoadPresentationForTimeStampCheck(targetPresentationId);
+
+                        if (targetPresentationDriveFile.Name != targetPresentationName)
+                        {
+                            RenamePresentation(targetPresentationDriveFile, targetPresentationName);
+                        }
 
                         if (targetPresentationDriveFile.AppProperties == null)
                         {
@@ -1187,18 +1198,10 @@ namespace GoogleDrive
                         PresentationSkipped.Invoke(this, null);
                         continue; //To the next row
                     }
-                    else
-                    {
-                        currentFileNumberInFolder++;
-                    }
 
                     #endregion
 
                     #region Create Folders if neccessary
-
-                    var targetPresentationName = string.Format("{0:00}. {1}", currentFileNumberInFolder, sourcePresentationName);
-                    //Replace double quotes to single quotes
-                    targetPresentationName = targetPresentationName.Replace("\"\"", "\"");
 
                     var studentsMainFolder = CheckToCreateDriveFolder(StudentsCache.GetSubFolderByName(sheet.Properties.Title), mainFolderName);
 
@@ -1231,6 +1234,8 @@ namespace GoogleDrive
 
                         //Update the spreadsheet with the new presentation id
                         UpdateSheetHyperlinkCell(masterPlanSpreadsheetId, sheet.Properties.Title, rowNumber, targetPresentationId);
+
+                        currentFileNumberInFolder++;
                     }
 
                     #endregion
@@ -1270,7 +1275,7 @@ namespace GoogleDrive
                     {
                         targetPresentationDriveFile = LoadPresentationForTimeStampCheck(targetPresentationId);
                     }
-                    MarkPresentationAsProcessed(targetPresentationDriveFile, targetPresentationId);
+                    MarkPresentationAsProcessed(targetPresentationDriveFile);
 
                     #endregion
 
@@ -1516,7 +1521,7 @@ namespace GoogleDrive
         private Google.Apis.Drive.v3.Data.File LoadPresentationForTimeStampCheck(string presentationId)
         {
             var presentationFileRequest = driveService.Files.Get(presentationId);
-            presentationFileRequest.Fields = "appProperties, modifiedTime";
+            presentationFileRequest.Fields = "id, name, appProperties, modifiedTime";
             return presentationFileRequest.Execute();
         }
 
@@ -1524,10 +1529,10 @@ namespace GoogleDrive
         /// Mark (with a time stamp) in drive that this presentation has been processed
         /// </summary>
         /// <param name="presentationFile"></param>
-        private void MarkPresentationAsProcessed(Google.Apis.Drive.v3.Data.File presentationFile, string fileId)
+        private void MarkPresentationAsProcessed(Google.Apis.Drive.v3.Data.File presentationFile)
         {
-            //Make sure normalize time is always after the modified time (15 seconds after)
-            var normalizeTime = DateTime.Now.AddSeconds(15).ToString();
+               //Make sure normalize time is always after the modified time (15 seconds after)
+               var normalizeTime = DateTime.Now.AddSeconds(15).ToString();
             if (presentationFile.AppProperties == null)
             {
                 presentationFile.AppProperties = new Dictionary<string, string>();
@@ -1540,10 +1545,40 @@ namespace GoogleDrive
             {
                 presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME] = normalizeTime;
             }
-            var updatePresentationFileRequest = driveService.Files.Update(presentationFile, fileId);
+
+
+            var updatePresentationFileRequest = driveService.Files.Update(presentationFile, presentationFile.Id);
             updatePresentationFileRequest.Fields = "appProperties";
+
+            var id = presentationFile.Id;
+            //Field cannot be updated - reset it before update - and the return the value back
+            presentationFile.Id = null;
+
             updatePresentationFileRequest.Execute();
 
+            presentationFile.Id = id;
+
+        }
+
+        /// <summary>
+        /// Rename presentation
+        /// </summary>
+        /// <param name="presentationFile"></param>
+        private void RenamePresentation(Google.Apis.Drive.v3.Data.File presentationFile, string newName)
+        {
+            var updatePresentationFileRequest = driveService.Files.Update(presentationFile, presentationFile.Id);
+            presentationFile.Name = newName;
+
+            var id = presentationFile.Id;
+
+            //Field cannot be updated - reset it before update - and the return the value back
+            presentationFile.Id = null;
+
+            updatePresentationFileRequest.Fields = "name";
+            updatePresentationFileRequest.Execute();
+
+            //Restore the id
+            presentationFile.Id = id;
         }
 
         /// <summary>
