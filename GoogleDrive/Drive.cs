@@ -876,7 +876,6 @@ namespace GoogleDrive
 
                 for (var i = 0; i < presentation.Slides.Count - 1; i++)
                 {
-
                     #region Align Image (if single) - and not in place
 
                     if (presentation.Slides[i].PageElements.Count == 4)
@@ -1311,9 +1310,6 @@ namespace GoogleDrive
         {
             bool slideHasStudentQuestion;
             bool slideHasSolution;
-
-            //var lp = pptPresentations.Open("c:\\dev\\1.pptx", MsoTriState.msoTrue, MsoTriState.msoFalse, MsoTriState.msoFalse);
-            //var sp = lp.Slides;
 
             #region Download presentation as powerpoint
 
