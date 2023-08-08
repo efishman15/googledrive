@@ -120,12 +120,17 @@ namespace GoogleDrive
                                 }
                                 else
                                 {
-                                    //Process all folders
-                                    LogOutputWithNewLine(string.Format("Start processing {0} teacher presentations...", drive.TeacherCache.TotalPresentations));
-                                    foreach (var folderKey in drive.TeacherCache.Folders.Keys)
-                                    {
-                                        drive.ProcessTeacherPresentations(drive.TeacherCache.Folders[folderKey], skipTimeStampCheck);
-                                    }
+                                    Console.WriteLine(string.Format("Teacher root folder {0} not found in cache", teacherRootFolder));
+                                    PrintUsageAndExit(4);
+                                }
+                            }
+                            else
+                            {
+                                //Process all folders
+                                LogOutputWithNewLine(string.Format("Start processing {0} teacher presentations...", drive.TeacherCache.TotalPresentations));
+                                foreach (var folderKey in drive.TeacherCache.Folders.Keys)
+                                {
+                                    drive.ProcessTeacherPresentations(drive.TeacherCache.Folders[folderKey], skipTimeStampCheck);
                                 }
                             }
                         }
@@ -141,12 +146,12 @@ namespace GoogleDrive
                         if (teacherRootFolder != null)
                         {
                             Console.WriteLine("'teacherrootfolder' argument is valid only in 'Teacher' mode");
-                            PrintUsageAndExit(4);
+                            PrintUsageAndExit(5);
                         }
                         else if (teacherPresentationId != null)
                         {
                             Console.WriteLine("teacherrootfolder is valid only in 'Teacher' mode");
-                            PrintUsageAndExit(5);
+                            PrintUsageAndExit(6);
                         }
 
                         #endregion
@@ -163,7 +168,7 @@ namespace GoogleDrive
                             else
                             {
                                 Console.WriteLine(string.Format("Sheet {0} does not exist", studentsStartSheet));
-                                PrintUsageAndExit(6);
+                                PrintUsageAndExit(7);
                             }
                         }
                         else
