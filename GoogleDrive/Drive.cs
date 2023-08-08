@@ -1,6 +1,5 @@
 ﻿using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
-using Google.Apis.Requests;
 using Google.Apis.Services;
 using Google.Apis.Sheets.v4;
 using Google.Apis.Slides.v1;
@@ -19,6 +18,7 @@ using System.IO;
 using System.Threading;
 using System.Text.RegularExpressions;
 using Google.Apis.Sheets.v4.Data;
+using Link = Google.Apis.Slides.v1.Data.Link;
 
 namespace GoogleDrive
 {
@@ -594,10 +594,10 @@ namespace GoogleDrive
         private static string[] Scopes = { DriveService.Scope.DriveMetadata, DriveService.Scope.Drive, DriveService.Scope.DriveFile, SlidesService.Scope.Presentations, SheetsService.Scope.Spreadsheets};
         private static string ApplicationName = "Google Drive";
 
-        private readonly Link lastSlidelink;
-        private readonly Link nextSlidelink;
-        private readonly Link prevSlidelink;
-        private readonly Link firstSlidelink;
+        private readonly Google.Apis.Slides.v1.Data.Link lastSlidelink;
+        private readonly Google.Apis.Slides.v1.Data.Link nextSlidelink;
+        private readonly Google.Apis.Slides.v1.Data.Link prevSlidelink;
+        private readonly Google.Apis.Slides.v1.Data.Link firstSlidelink;
 
         private readonly string firstSlideText;
         private readonly string prevSlideText;
@@ -659,7 +659,7 @@ namespace GoogleDrive
             {
                 string credPath = "~/.credentials/token.json";
                 credential = GoogleWebAuthorizationBroker.AuthorizeAsync(
-                    GoogleClientSecrets.Load(stream).Secrets,
+                    GoogleClientSecrets.FromStream(stream).Secrets,
                     Scopes,
                     ConfigurationManager.AppSettings["user"],
                     CancellationToken.None,
@@ -702,10 +702,10 @@ namespace GoogleDrive
 
             #region Load Configiguration Variables
 
-            lastSlidelink = new Link() { RelativeLink = "LAST_SLIDE" };
-            nextSlidelink = new Link() { RelativeLink = "NEXT_SLIDE" };
-            prevSlidelink = new Link() { RelativeLink = "PREVIOUS_SLIDE" };
-            firstSlidelink = new Link() { RelativeLink = "FIRST_SLIDE" };
+            lastSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "LAST_SLIDE" };
+            nextSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "NEXT_SLIDE" };
+            prevSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "PREVIOUS_SLIDE" };
+            firstSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "FIRST_SLIDE" };
 
             firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
             prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
@@ -776,7 +776,7 @@ namespace GoogleDrive
         /// Process all the presentations in a root folder and its sub folders
         /// </summary>
         /// <param name="rootFolder"></param>
-        public void ProcessTeacherPresentations(CacheFolder rootFolder)
+        public void ProcessTeacherPresentations(CacheFolder rootFolder, bool skipTimeStampCheck = false)
         {
             if (rootFolder.Level == 1)
             {
@@ -785,13 +785,13 @@ namespace GoogleDrive
 
             foreach (var cachePresentation in rootFolder.Presentations)
             {
-                ProcessTeacherPresentation(cachePresentation);
+                ProcessTeacherPresentation(cachePresentation, skipTimeStampCheck);
 
             }
             //Process presentations in all subfolders
             foreach (var cachedFolderKey in rootFolder.Folders.Keys)
             {
-                ProcessTeacherPresentations(rootFolder.Folders[cachedFolderKey]);
+                ProcessTeacherPresentations(rootFolder.Folders[cachedFolderKey], skipTimeStampCheck);
             }
         }
 
@@ -806,7 +806,7 @@ namespace GoogleDrive
         /// 3) For the last slide: add "TOC": a link to each slide (except this last slide)
         /// </summary>
         /// <param name="presentationId"></param>
-        public void ProcessTeacherPresentation(CachePresentation cachePresentation)
+        public void ProcessTeacherPresentation(CachePresentation cachePresentation, bool skipTimeStampCheck = false)
         {
             try
             {
@@ -814,9 +814,11 @@ namespace GoogleDrive
 
                 string objectId;
                 int currentStartIndex;
+                var slideHeaderCreated = false;
                 var slideFooterCreated = false;
                 var slidePageIdCreated = false;
                 var desiredFooter = cachePresentation.FooterText + "\n";
+                string desiredHeader = null;
 
                 #endregion
 
@@ -830,7 +832,7 @@ namespace GoogleDrive
                 }
                 if (presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                 {
-                    if (presentationFile.ModifiedTime <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
                     {
                         //File was not modified since it was last processed - skip
                         PresentationSkipped.Invoke(this, null);
@@ -902,12 +904,26 @@ namespace GoogleDrive
 
                     var parsedSlideTextElements = ParseSlideTextElements(presentation.Slides[i]);
 
-                    if (parsedSlideTextElements.Header != null && 
-                        parsedSlideTextElements.Header.Text != null &&
-                        parsedSlideTextElements.Header.Shape.Text.TextElements[1].TextRun.Content.Contains(lookForTextInHeader)
-                        )
+                    desiredHeader = null;
+                    if (parsedSlideTextElements.Header != null)
                     {
-                        PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader)));
+                        desiredHeader = parsedSlideTextElements.Header.Text;
+                        if (!IsTextElementValid(parsedSlideTextElements.Header, parsedSlideTextElements.Header.Text, slideHeaderTransform, null))
+                        {
+                            //Delete the invalid object and create a new one
+                            myBatchRequest.AddDeleteObjectRequest(parsedSlideTextElements.Header.ObjectId);
+                            myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideHeaderSize, slideHeaderTransform);
+                            slideHeaderCreated = true;
+                        }
+                        else if (parsedSlideTextElements.Header.Text.Contains(lookForTextInHeader))
+                        {
+                            //Header contains forbidden text
+                            PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "Header contains " + lookForTextInHeader)));
+                        }
+                    }
+                    else
+                    {
+                        PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "No Header")));
                     }
 
                     //Footer - exclude last 2 slides (homework + toc)
@@ -915,11 +931,12 @@ namespace GoogleDrive
                     {
                         if (parsedSlideTextElements.Footer != null)
                         {
-                            if (parsedSlideTextElements.Footer.Text == null || parsedSlideTextElements.Footer.Text != desiredFooter)
-                                //Footer text box exists - update only if null or different
+                            if (!IsTextElementValid(parsedSlideTextElements.Footer, desiredFooter, slideFooterTransform, null))
                             {
-                                myBatchRequest.AddDeleteTextRequest(parsedSlideTextElements.Footer.ObjectId, parsedSlideTextElements.Footer.Shape);
-                                myBatchRequest.AddInsertTextRequest(parsedSlideTextElements.Footer.ObjectId, desiredFooter, 0);
+                                //Delete the invalid object and create a new one
+                                myBatchRequest.AddDeleteObjectRequest(parsedSlideTextElements.Footer.ObjectId);
+                                myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideFooterSize, slideFooterTransform);
+                                slideFooterCreated = true;
                             }
                         }
                         else
@@ -930,26 +947,17 @@ namespace GoogleDrive
                         }
                     }
 
-
                     string desiredPageId = (i + 1).ToString();
 
                     //Page Id
                     if (parsedSlideTextElements.SlidePageId != null)
                     {
-                        if (parsedSlideTextElements.SlidePageId.Text == null)
+                        if (!IsTextElementValid(parsedSlideTextElements.SlidePageId, desiredPageId, slidePageIdTransform, nextSlidelink))
                         {
-                            //An empty text box at the location of the page id - delete it
+                            //Delete the invalid object and create a new one
                             myBatchRequest.AddDeleteObjectRequest(parsedSlideTextElements.SlidePageId.ObjectId);
-                        }
-                        else
-                        {
-                            //Text exists
-                            if (parsedSlideTextElements.SlidePageId.Text != desiredPageId)
-                            {
-                                //Page Id text box exists - update only if different
-                                myBatchRequest.AddDeleteTextRequest(parsedSlideTextElements.SlidePageId.ObjectId, parsedSlideTextElements.SlidePageId.Shape);
-                                myBatchRequest.AddInsertTextRequest(parsedSlideTextElements.SlidePageId.ObjectId, desiredPageId, 0);
-                            }
+                            myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slidePageIdSize, slidePageIdTransform);
+                            slidePageIdCreated = true;
                         }
                     }
                     else
@@ -964,10 +972,23 @@ namespace GoogleDrive
 
                     var addTextBoxesBatchRequest = new MyBatchRequest(slidesService, cachePresentation.PresentationId);
                     var textBoxesAdded = false;
-                    for (var k = 0; k < batchResponse.Replies.Count; k++)
+                    var repliesCount = 0;
+                    if (batchResponse != null)
+                    {
+                        repliesCount = batchResponse.Replies.Count;
+                    }
+                    for (var k = 0; k < repliesCount; k++)
                     {
                         if (batchResponse.Replies[k].CreateShape != null)
                         {
+                            if (slideHeaderCreated)
+                            {
+                                addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredHeader, 0);
+                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideHeaderTextBoxTextStyle", slideHeaderTextBoxTextStyleFields, 0, desiredHeader.Length, null);
+                                addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
+                                slideHeaderCreated = false;
+                                textBoxesAdded = true;
+                            }
                             if (slideFooterCreated)
                             {
                                 addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredFooter, 0);
@@ -979,7 +1000,7 @@ namespace GoogleDrive
                             if (slidePageIdCreated)
                             {
                                 addTextBoxesBatchRequest.AddInsertTextRequest(batchResponse.Replies[k].CreateShape.ObjectId, desiredPageId, 0);
-                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields, 0, desiredPageId.Length, null);
+                                addTextBoxesBatchRequest.AddUpdateTextStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, "SlideIdTextBoxTextStyle", slideIdTextBoxTextStyleFields, 0, desiredPageId.Length, nextSlidelink, false);
                                 addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
                                 slidePageIdCreated = false;
                                 textBoxesAdded = true;
@@ -1018,7 +1039,7 @@ namespace GoogleDrive
                     string currentPageIdString;
                     for (var i = 1; i <= presentation.Slides.Count - 1; i++)
                     {
-                        var link = new Link()
+                        var link = new Google.Apis.Slides.v1.Data.Link()
                         {
                             SlideIndex = i - 1
                         };
@@ -1059,7 +1080,7 @@ namespace GoogleDrive
         /// <summary>
         /// Process students presentations
         /// </summary>
-        public void ProcessStudentsPresentations(string startFromSheet = null)
+        public void ProcessStudentsPresentations(string startFromSheet = null, bool skipTimeStampCheck = false)
         {
             //Open masterplan spreadsheet
             var masterPlanSpreadsheetRequest = sheetService.Spreadsheets.Get(masterPlanSpreadsheetId);
@@ -1158,7 +1179,7 @@ namespace GoogleDrive
                         }
                         if (targetPresentationDriveFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                         {
-                            if (sourcePresentationDriveFile.ModifiedTime <= Convert.ToDateTime(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                            if (!skipTimeStampCheck && sourcePresentationDriveFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
                             {
                                 //Source file was not modified since the target was last processed - skip
                                 PresentationSkipped.Invoke(this, null);
@@ -1168,9 +1189,9 @@ namespace GoogleDrive
                         }
                     }
 
-                    #endregion
+#endregion
 
-                    #region Check if and which slides are to be copied
+#region Check if and which slides are to be copied
 
                     //Get the teachers presentation
                     var sourcePresentationRequest = slidesService.Presentations.Get(sourcePresentationId);
@@ -1198,9 +1219,9 @@ namespace GoogleDrive
                         continue; //To the next row
                     }
 
-                    #endregion
+#endregion
 
-                    #region Create Folders if neccessary
+#region Create Folders if neccessary
 
                     var studentsMainFolder = CheckToCreateDriveFolder(StudentsCache.GetSubFolderByName(sheet.Properties.Title), mainFolderName);
 
@@ -1215,9 +1236,9 @@ namespace GoogleDrive
                         studentsSubFolder = studentsMainFolder;
                     }
 
-                    #endregion
+#endregion
 
-                    #region Create target presentation if neccessary
+#region Create target presentation if neccessary
 
                     if (targetPresentationId == null)
                     {
@@ -1237,9 +1258,9 @@ namespace GoogleDrive
                         currentFileNumberInFolder++;
                     }
 
-                    #endregion
+#endregion
 
-                    #region Invoke App Script to copy the slide
+#region Invoke App Script to copy the slide
 
                     //Unfortunatelly Presentation.appendSlide method (with linking option) exists only in App Scripts
                     var scriptExecutionBody = new ExecutionRequest
@@ -1266,9 +1287,9 @@ namespace GoogleDrive
                         PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(targetPresentationId, string.Empty, 0, scriptResult.Response.ToString())));
                     }
 
-                    #endregion
+#endregion
 
-                    #region Mark presentation as processed
+#region Mark presentation as processed
 
                     if (targetPresentationDriveFile == null)
                     {
@@ -1276,7 +1297,7 @@ namespace GoogleDrive
                     }
                     MarkPresentationAsProcessed(targetPresentationDriveFile);
 
-                    #endregion
+#endregion
 
                     rowNumber++;
                 }
@@ -1287,18 +1308,18 @@ namespace GoogleDrive
 
         }
 
-        #endregion
+#endregion
 
-        #region Events
+#region Events
 
         public event EventHandler PresentationProcessed;
         public event EventHandler PresentationSkipped;
         public event EventHandler PresentationError;
         public event EventHandler FolderProcessingStarted;
 
-        #endregion
+#endregion
 
-        #region Private Methods
+#region Private Methods
 
         /// <summary>
         /// Exports and Download the presentation as a Microsoft Powerpoint file (.pptx) and validates each slide:
@@ -1311,7 +1332,7 @@ namespace GoogleDrive
             bool slideHasStudentQuestion;
             bool slideHasSolution;
 
-            #region Download presentation as powerpoint
+#region Download presentation as powerpoint
 
             var exportRequest = driveService.Files.Export(cachePresentation.PresentationId, msPowerPointMimeType);
             var driveStream = exportRequest.ExecuteAsStream();
@@ -1320,7 +1341,7 @@ namespace GoogleDrive
             driveStream.CopyTo(fileStream);
             fileStream.Close();
 
-            #endregion
+#endregion
 
             var localPresentation = pptPresentations.Open(exportPath, MsoTriState.msoTrue, MsoTriState.msoFalse, MsoTriState.msoFalse);
             for (var i = 1; i <= localPresentation.Slides.Count; i++)
@@ -1375,6 +1396,28 @@ namespace GoogleDrive
         }
 
         /// <summary>
+        /// Retrives text from a shape page element
+        /// </summary>
+        /// <param name="shape"></param>
+        /// <returns></returns>
+        private Google.Apis.Slides.v1.Data.Link GetLinkFromShape(Google.Apis.Slides.v1.Data.Shape shape)
+        {
+            if (shape != null &&
+                shape.Text != null &&
+                shape.Text.TextElements != null &&
+                shape.Text.TextElements.Count > 1 &&
+                shape.Text.TextElements[1].TextRun != null &&
+                shape.Text.TextElements[1].TextRun.Style != null &&
+                shape.Text.TextElements[1].TextRun.Style.Link != null
+                )
+            {
+                return shape.Text.TextElements[1].TextRun.Style.Link;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Parses the slide and looks for the Header/Footer/PageId text boxes
         /// </summary>
         /// <param name="slide"></param>
@@ -1390,37 +1433,50 @@ namespace GoogleDrive
                 {
                     //Found the header object
                     if (slide.PageElements[j].Transform.ScaleX == slideHeaderTransform.ScaleX &&
-                        slide.PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY &&
-                        slide.PageElements[j].Transform.TranslateX == slideHeaderTransform.TranslateX &&
-                        slide.PageElements[j].Transform.TranslateY == slideHeaderTransform.TranslateY)
-
+                        slide.PageElements[j].Transform.ScaleY == slideHeaderTransform.ScaleY)
                     {
-                        slideParsedTextElements.Header = new SlideParsedTextElement(slide.PageElements[j].ObjectId, j, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Shape);
+                        slideParsedTextElements.Header = new SlideParsedTextElement(slide.PageElements[j].ObjectId, j, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Transform, slide.PageElements[j].Shape);
                     }
 
                     //Found the footer object
                     else if (slide.PageElements[j].Transform.ScaleX == slideFooterTransform.ScaleX &&
-                             slide.PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY &&
-                             slide.PageElements[j].Transform.TranslateX == slideFooterTransform.TranslateX &&
-                             slide.PageElements[j].Transform.TranslateY == slideFooterTransform.TranslateY)
-
+                             slide.PageElements[j].Transform.ScaleY == slideFooterTransform.ScaleY)
                     {
-                        slideParsedTextElements.Footer = new SlideParsedTextElement(slide.PageElements[j].ObjectId, j, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Shape);
+                        slideParsedTextElements.Footer = new SlideParsedTextElement(slide.PageElements[j].ObjectId, j, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Transform, slide.PageElements[j].Shape);
                     }
 
                     //Found the page id object
                     else if (slide.PageElements[j].Transform.ScaleX == slidePageIdTransform.ScaleX &&
-                             slide.PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY &&
-                             slide.PageElements[j].Transform.TranslateX == slidePageIdTransform.TranslateX &&
-                             slide.PageElements[j].Transform.TranslateY == slidePageIdTransform.TranslateY)
+                             slide.PageElements[j].Transform.ScaleY == slidePageIdTransform.ScaleY)
 
                     {
-                        slideParsedTextElements.SlidePageId = new SlideParsedTextElement(slide.PageElements[j].ObjectId, j, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Shape);
+                        slideParsedTextElements.SlidePageId = new SlideParsedTextElement(slide.PageElements[j].ObjectId, j, GetTextFromShape(slide.PageElements[j].Shape), slide.PageElements[j].Transform, slide.PageElements[j].Shape);
                     }
                 }
             }
 
             return slideParsedTextElements;
+        }
+
+        /// <summary>
+        /// Validates a text box to check:
+        /// 1. Is located in the designated place
+        /// 2. Contains the correct text
+        /// 3. Contains a desired link
+        /// </summary>
+        /// <param name="slideParsedTextElement"></param>
+        /// <returns></returns>
+        private bool IsTextElementValid(SlideParsedTextElement slideParsedTextElement, string desiredText, AffineTransform desiredTransform, Link desiredLink)
+        {
+            if (slideParsedTextElement.Transform.TranslateX != desiredTransform.TranslateX ||
+                slideParsedTextElement.Transform.TranslateY != desiredTransform.TranslateY ||
+                slideParsedTextElement.Text != desiredText ||
+                desiredLink != GetLinkFromShape(slideParsedTextElement.Shape))
+            {
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -1592,10 +1648,10 @@ namespace GoogleDrive
             return null;
         }
 
-        #endregion
+#endregion
     }
 
-    #endregion
+#endregion
 
     #region Class MyBatchRequest
 
@@ -1686,7 +1742,7 @@ namespace GoogleDrive
         /// <param name="startIndex"></param>
         /// <param name="endIndex"></param>
         /// <param name="link"></param>
-        public void AddUpdateTextStyleRequest(string objectId, string textStyleConfigKey, string textStyleFields, int startIndex, int endIndex, Link link = null, bool underline = true)
+        public void AddUpdateTextStyleRequest(string objectId, string textStyleConfigKey, string textStyleFields, int startIndex, int endIndex, Google.Apis.Slides.v1.Data.Link link = null, bool underline = true)
         {
             var fields = String.Copy(textStyleFields);
             var textStyle = JsonConvert.DeserializeObject<Google.Apis.Slides.v1.Data.TextStyle>(ConfigurationManager.AppSettings[textStyleConfigKey]);
@@ -1891,17 +1947,19 @@ namespace GoogleDrive
         public string ObjectId { get; private set; }
         public int PageElementIndex { get; private set; }
         public string Text { get; private set; }
+        public AffineTransform Transform { get; private set; }
         public Google.Apis.Slides.v1.Data.Shape Shape {get; private set; }
 
         #endregion
 
         #region C'Tor/Dtor
-        public SlideParsedTextElement(string objectId, int pageElementIndex, string text, Google.Apis.Slides.v1.Data.Shape shape)
+        public SlideParsedTextElement(string objectId, int pageElementIndex, string text, AffineTransform transform, Google.Apis.Slides.v1.Data.Shape shape)
         {
             ObjectId = objectId;
             PageElementIndex = pageElementIndex;
             Shape = shape;
             Text = text;
+            Transform = transform;
         }
         #endregion
     }

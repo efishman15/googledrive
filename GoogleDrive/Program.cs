@@ -1,47 +1,66 @@
 ﻿using System;
-using System.Configuration;
+using Fclp;
 
 namespace GoogleDrive
 {
     internal static class Program
     {
-        private enum ProcessingType
-        {
-            TEACHER_PRESENTATION,
-            TEACHER_FOLDER,
-            STUDENTS
-        };
         private static Drive drive;
         private static int totalSlidesProcessed;
         private static int totalSlidesSkipped;
         private static string currentProcessingFolder;
         private static int lastFolderSlidesProcessed;
         private static int lastFolderSlidesSkipped;
-        private static ProcessingType processingType;
 
         private static void Main(string[] args)
         {
-            #region Validate args
+            #region Variables
 
-            if (args.Length > 0)
+            var commandLineParser = new FluentCommandLineParser();
+            string mode = null;
+            string teacherRootFolder = null;
+            string teacherPresentationId = null;
+            string studentsStartSheet = null;
+            bool skipTimeStampCheck = false;
+
+            #endregion
+
+            #region Parse command line
+
+            commandLineParser.SetupHelp("h", "help", "?")
+                  .Callback(callback => PrintUsageAndExit(0));
+
+            commandLineParser.Setup<string>('m', "mode")
+                .Required()
+                .Callback(value => mode = value)
+                .WithDescription("Select either 'Teacher' or 'Students'. If not supplied - default is set to 'Teacher'");
+
+            commandLineParser.Setup<string>('r', "teacherrootfolder")
+                .Callback(value => teacherRootFolder = value)
+                .WithDescription("In teacher mode: override configuration's top root folder");
+
+           commandLineParser.Setup<string>('p', "teacherpresentationid")
+                .Callback(value => teacherPresentationId = value)
+                .WithDescription("In teacher mode: work on this specific presentation only");
+
+           commandLineParser.Setup<string>('s', "studentsstartsheet")
+                .Callback(value => studentsStartSheet = value)
+                .WithDescription("In students mode: skip and start working from this sheet");
+
+           commandLineParser.Setup<bool>('t', "teacherskiptimestampcheck")
+                .Callback(value => skipTimeStampCheck = value)
+                .SetDefault(false)
+                .WithDescription("allows skipping time stamp check - default is false - time stamp will be checked");
+
+           var commandLineArgs = commandLineParser.Parse(args);
+
+            if (commandLineArgs.HasErrors)
             {
-                if (args.Length > 1)
-                {
-                    PrintUsageAndExit(1);
-                }
-                else if (
-                            args[0] != "/RefreshList" && 
-                            (!args[0].StartsWith("/RootFolderId=") || args[0].Length<15) && 
-                            (!args[0].StartsWith("/PresentationId=") || args[0].Length < 17) &&
-                            args[0] != "/Students" &&
-                            (!args[0].StartsWith("/StartFromSheet=") || args[0].Length < 17)
-
-                        )
-                {
-                    PrintUsageAndExit(2);
-                }
+                Console.WriteLine(commandLineArgs.ErrorText);
+                PrintUsageAndExit(0);
+                return;
             }
-            
+
             #endregion
 
             LogOutputWithNewLine("Started...");
@@ -52,115 +71,111 @@ namespace GoogleDrive
             drive.FolderProcessingStarted += Drive_FolderProcessingStarted;
             drive.PresentationSkipped += Drive_PresentationSkipped;
 
-            #region Parse args
-
-            string presentationId = null;
-            string specificFolderId = null;
-            string startFromSheet = null;
-            
-            if (args.Length > 0) {
-                if (args[0] == "/?")
-                {
-                    PrintUsageAndExit(0);
-                }
-                else if (args[0].StartsWith("/RootFolderId="))
-                {
-                    specificFolderId = args[0].Split('=')[1];
-                    processingType = ProcessingType.TEACHER_FOLDER;                    
-                }
-                else if (args[0].StartsWith("/PresentationId="))
-                {
-                    presentationId = args[0].Split('=')[1];
-                    processingType = ProcessingType.TEACHER_PRESENTATION;
-                }
-                else if (args[0] == "/Students")
-                {
-                    processingType = ProcessingType.STUDENTS;
-                }
-                else if (args[0].StartsWith("/StartFromSheet="))
-                {
-                    startFromSheet = args[0].Split('=')[1];
-                    processingType = ProcessingType.STUDENTS;
-                }
-            }
-            else
+            switch (mode)
             {
-                processingType = ProcessingType.TEACHER_FOLDER;
-            }
-
-            #endregion
-
-            switch (processingType) 
-            {
-                case ProcessingType.TEACHER_PRESENTATION:
-
-                    #region Process specfic presentation
-
-                    LogOutputWithNewLine(string.Format("Processing specific teacher presentation: {0}", presentationId));
-
-                    var cachePresentation = drive.TeacherCache.GetPresentation(presentationId, drive.TeacherCache.Folders);
-                    if (cachePresentation != null)
+                case "Teacher":
                     {
-                        drive.ProcessTeacherPresentation(cachePresentation);
-                    }
-                    else
-                    {
-                        LogOutputWithNewLine(string.Format("Presentation {0} not found in cache", presentationId));
-                    }
-                    break;
+                        #region Validate Teacher arguments
 
-                #endregion
-
-                case ProcessingType.TEACHER_FOLDER:
-
-                    #region Process folder presentations
-
-                    var rootFolderId = ConfigurationManager.AppSettings["rootFolderId"];
-
-                    CacheFolder rootFolder;
-                    if (specificFolderId != null)
-                    {
-                        rootFolder = drive.TeacherCache.GetFolder(specificFolderId, drive.TeacherCache.Folders);
-                        if (rootFolder == null)
+                        if (studentsStartSheet != null)
                         {
-                            //Specified folder id not found in cache
-                            PrintUsageAndExit(3);
+                            Console.WriteLine("'studentsstartsheet' argument is valid only in 'Students' mode");
+                            PrintUsageAndExit(1);
+                        }
+                        if (teacherPresentationId != null && teacherRootFolder != null)
+                        {
+                            Console.WriteLine("Only one of: 'teacherrootfolder', 'teacherpresentationid' can be specified in 'Teacher' mode");
+                            PrintUsageAndExit(2);
                         }
 
-                        drive.ProcessTeacherPresentations(rootFolder);
-                    }
-                    else
-                    {
-                        LogOutputWithNewLine(string.Format("Start processing {0} teacher presentations...", drive.TeacherCache.TotalPresentations));
-                        foreach (var folderKey in drive.TeacherCache.Folders.Keys)
+                        #endregion
+
+                        #region Teacher cases
+
+                        if (teacherPresentationId != null)
                         {
-                            drive.ProcessTeacherPresentations(drive.TeacherCache.Folders[folderKey]);
-                        }
-                    }
-
-                    break;
-
-                #endregion
-
-                case ProcessingType.STUDENTS:
-                    if (startFromSheet != null)
-                    {
-                        if (drive.StudentsCache.GetSubFolderByName(startFromSheet) != null)
-                        {
-                            LogOutputWithNewLine(string.Format("Processing student presentations, starting from sheet {0}...", startFromSheet));
-                            drive.ProcessStudentsPresentations(startFromSheet);
+                            //Processing specific presentation
+                            var cachePresentation = drive.TeacherCache.GetPresentation(teacherPresentationId, drive.TeacherCache.Folders);
+                            if (cachePresentation != null)
+                            {
+                                LogOutputWithNewLine(string.Format("Processing specific teacher presentation: {0}", teacherPresentationId));
+                                drive.ProcessTeacherPresentation(cachePresentation, skipTimeStampCheck);
+                            }
+                            else
+                            {
+                                Console.WriteLine(string.Format("Presentation {0} not found in cache", teacherPresentationId));
+                                PrintUsageAndExit(3);
+                            }
                         }
                         else
                         {
-                            LogOutputWithNewLine(string.Format("Sheet {0} does not exist", startFromSheet));
+                            CacheFolder rootFolder;
+                            if (teacherRootFolder != null)
+                            {
+                                rootFolder = drive.TeacherCache.GetSubFolderByName(teacherRootFolder);
+                                //Process only a specified root folder
+                                if (rootFolder != null)
+                                {
+                                    drive.ProcessTeacherPresentations(rootFolder, skipTimeStampCheck);
+                                }
+                                else
+                                {
+                                    //Process all folders
+                                    LogOutputWithNewLine(string.Format("Start processing {0} teacher presentations...", drive.TeacherCache.TotalPresentations));
+                                    foreach (var folderKey in drive.TeacherCache.Folders.Keys)
+                                    {
+                                        drive.ProcessTeacherPresentations(drive.TeacherCache.Folders[folderKey], skipTimeStampCheck);
+                                    }
+                                }
+                            }
                         }
+
+                        #endregion
+
+                        break;
                     }
-                    else
+                case "Students":
                     {
-                        LogOutputWithNewLine("Processing student presentations...");
-                        drive.ProcessStudentsPresentations();
+                        #region Validate Students arguments
+
+                        if (teacherRootFolder != null)
+                        {
+                            Console.WriteLine("'teacherrootfolder' argument is valid only in 'Teacher' mode");
+                            PrintUsageAndExit(4);
+                        }
+                        else if (teacherPresentationId != null)
+                        {
+                            Console.WriteLine("teacherrootfolder is valid only in 'Teacher' mode");
+                            PrintUsageAndExit(5);
+                        }
+
+                        #endregion
+
+                        #region Students cases
+
+                        if (studentsStartSheet != null)
+                        {
+                            if (drive.StudentsCache.GetSubFolderByName(studentsStartSheet) != null)
+                            {
+                                LogOutputWithNewLine(string.Format("Processing student presentations, starting from sheet {0}...", studentsStartSheet));
+                                drive.ProcessStudentsPresentations(studentsStartSheet, skipTimeStampCheck);
+                            }
+                            else
+                            {
+                                Console.WriteLine(string.Format("Sheet {0} does not exist", studentsStartSheet));
+                                PrintUsageAndExit(6);
+                            }
+                        }
+                        else
+                        {
+                            LogOutputWithNewLine("Processing student presentations...");
+                            drive.ProcessStudentsPresentations();
+                        }
+
+                        #endregion
+
+                        break;
                     }
-                    break;
             }
 
             LogOutputWithNewLine("Finished...");
@@ -209,15 +224,13 @@ namespace GoogleDrive
 
         private static void PrintUsageAndExit(int exitCode)
         {
-            Console.WriteLine("GoogleDrive [/?] [/RootFolderId=<FolderId>] [/Id=<PresentationId>] [/Students] [/StartFromSheet=<SheetName>]");
-            Console.WriteLine("Only one of the parameters can be specified at a time:");
-            Console.WriteLine("/RootFolderId                Process only teacher presentations from this Root Folder and its subfolders");
-            Console.WriteLine("/PresentationId              Process only this teacher presentation");
-            Console.WriteLine("/Students                    Process students presentations");
-            Console.WriteLine("/StartFromSheet=<SheetName>  Process students presentations, start from sheet by its name");
-            Console.WriteLine("/?                           Prints this help");
-            Console.WriteLine("");
-            Console.WriteLine("If no parameter is specified, default will process teacher presentations from a root folder in the configuration file");
+            Console.WriteLine("GoogleDrive [/h /help / ?] [/m:Teacher|Students] [/r:teacherrootfolder] [/p:presentationid] [/t]");
+            Console.WriteLine("/h /help /?                  Prints this screen");
+            Console.WriteLine("/m:Teacher|Students          Mode: 'Teacher' or 'Students'");
+            Console.WriteLine("/p:presentationId            Process only the teacher presentation");
+            Console.WriteLine("/r:rootfolder                Process only a specific teacher root folder (e.g. 801, 802, ...)");
+            Console.WriteLine("/s:sheetname                 Process students presentations, start from sheet by its name");
+            Console.WriteLine("/t                           Skip time stamp check");
             Environment.Exit(exitCode);
         }
     }
