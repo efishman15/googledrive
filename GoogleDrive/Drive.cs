@@ -915,6 +915,11 @@ namespace GoogleDrive
                             myBatchRequest.AddCreateShapeRequest(presentation.Slides[i].ObjectId, slideHeaderSize, slideHeaderTransform);
                             slideHeaderCreated = true;
                         }
+                        else if (string.IsNullOrEmpty(parsedSlideTextElements.Header.Text))
+                        {
+                            //Header contains empty text
+                            PresentationError.Invoke(this, new SlideErrorEventArgs(new SlideError(presentation.PresentationId, presentation.Title, i + 1, "No Header")));
+                        }
                         else if (parsedSlideTextElements.Header.Text.Contains(lookForTextInHeader))
                         {
                             //Header contains forbidden text

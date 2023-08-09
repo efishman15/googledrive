@@ -181,6 +181,13 @@ namespace GoogleDrive
 
                         break;
                     }
+
+                default:
+
+                    Console.WriteLine(string.Format("Mode {0} is invalid. Supported modes are only: 'Teacher' or 'Students'", mode));
+                    PrintUsageAndExit(8);
+
+                    break;
             }
 
             LogOutputWithNewLine("Finished...");
