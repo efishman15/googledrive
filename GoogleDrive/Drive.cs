@@ -993,6 +993,7 @@ namespace GoogleDrive
                                 addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
                                 slideHeaderCreated = false;
                                 textBoxesAdded = true;
+                                continue; //To the next CreateShape reply
                             }
                             if (slideFooterCreated)
                             {
@@ -1001,6 +1002,7 @@ namespace GoogleDrive
                                 addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
                                 slideFooterCreated = false;
                                 textBoxesAdded = true;
+                                continue; //To the next CreateShape reply
                             }
                             if (slidePageIdCreated)
                             {
@@ -1009,6 +1011,7 @@ namespace GoogleDrive
                                 addTextBoxesBatchRequest.AddUpdateParagraphStyleRequest(batchResponse.Replies[k].CreateShape.ObjectId, false);
                                 slidePageIdCreated = false;
                                 textBoxesAdded = true;
+                                continue; //To the next CreateShape reply
                             }
                         }
                     }
@@ -1387,17 +1390,22 @@ namespace GoogleDrive
         /// <returns></returns>
         private string GetTextFromShape(Google.Apis.Slides.v1.Data.Shape shape)
         {
-            if (shape != null &&
-                shape.Text != null &&
-                shape.Text.TextElements != null &&
-                shape.Text.TextElements.Count > 1 &&
-                shape.Text.TextElements[1].TextRun != null &&
-                shape.Text.TextElements[1].TextRun.Content != null)
+            if (shape == null ||
+                shape.Text == null ||
+                shape.Text.TextElements == null)
             {
-                return shape.Text.TextElements[1].TextRun.Content;
+                return null;
             }
-
-            return null;
+            string text = "";
+            for(var i=0; i < shape.Text.TextElements.Count; i++)
+            {
+                if (shape.Text.TextElements[i].TextRun != null &&
+                    shape.Text.TextElements[i].TextRun.Content != null)
+                {
+                    text += shape.Text.TextElements[i].TextRun.Content;
+                }
+            }
+            return text;
         }
 
         /// <summary>
