@@ -20,8 +20,9 @@ namespace GoogleDrive
             string mode = null;
             string teacherRootFolder = null;
             string teacherPresentationId = null;
-            string studentsStartSheet = null;
+            string studentsSpecificSheet = null;
             bool skipTimeStampCheck = false;
+            bool clearAndRebuildCache = false;
 
             #endregion
 
@@ -31,7 +32,6 @@ namespace GoogleDrive
                   .Callback(callback => PrintUsageAndExit(0));
 
             commandLineParser.Setup<string>('m', "mode")
-                .Required()
                 .Callback(value => mode = value)
                 .WithDescription("Select either 'Teacher' or 'Students'. If not supplied - default is set to 'Teacher'");
 
@@ -43,16 +43,21 @@ namespace GoogleDrive
                 .Callback(value => teacherPresentationId = value)
                 .WithDescription("In teacher mode: work on this specific presentation only");
 
-           commandLineParser.Setup<string>('s', "studentsstartsheet")
-                .Callback(value => studentsStartSheet = value)
-                .WithDescription("In students mode: skip and start working from this sheet");
+           commandLineParser.Setup<string>('s', "studentsspecificsheet")
+                .Callback(value => studentsSpecificSheet = value)
+                .WithDescription("In students mode: process only this students sheet");
 
            commandLineParser.Setup<bool>('t', "teacherskiptimestampcheck")
                 .Callback(value => skipTimeStampCheck = value)
                 .SetDefault(false)
                 .WithDescription("allows skipping time stamp check - default is false - time stamp will be checked");
 
-           var commandLineArgs = commandLineParser.Parse(args);
+            commandLineParser.Setup<bool>('c', "clearandrebuildcache")
+                 .Callback(value => clearAndRebuildCache = value)
+                 .SetDefault(false)
+                 .WithDescription("clears the json local cache files");
+
+            var commandLineArgs = commandLineParser.Parse(args);
 
             if (commandLineArgs.HasErrors)
             {
@@ -65,7 +70,7 @@ namespace GoogleDrive
 
             LogOutputWithNewLine("Started...");
 
-            drive = new Drive();
+            drive = new Drive(clearAndRebuildCache);
             drive.PresentationProcessed += Drive_PresentationProcessed;
             drive.PresentationError += Drive_PresentationError;
             drive.FolderProcessingStarted += Drive_FolderProcessingStarted;
@@ -77,7 +82,7 @@ namespace GoogleDrive
                     {
                         #region Validate Teacher arguments
 
-                        if (studentsStartSheet != null)
+                        if (studentsSpecificSheet != null)
                         {
                             Console.WriteLine("'studentsstartsheet' argument is valid only in 'Students' mode");
                             PrintUsageAndExit(1);
@@ -158,22 +163,22 @@ namespace GoogleDrive
 
                         #region Students cases
 
-                        if (studentsStartSheet != null)
+                        if (studentsSpecificSheet != null)
                         {
-                            if (drive.StudentsCache.GetSubFolderByName(studentsStartSheet) != null)
+                            if (drive.StudentsCache.GetSubFolderByName(studentsSpecificSheet) != null)
                             {
-                                LogOutputWithNewLine(string.Format("Processing student presentations, starting from sheet {0}...", studentsStartSheet));
-                                drive.ProcessStudentsPresentations(studentsStartSheet, skipTimeStampCheck);
+                                LogOutputWithNewLine(string.Format("Processing student presentations, only for sheet {0}...", studentsSpecificSheet));
+                                drive.ProcessStudentsPresentations(studentsSpecificSheet, skipTimeStampCheck);
                             }
                             else
                             {
-                                Console.WriteLine(string.Format("Sheet {0} does not exist", studentsStartSheet));
+                                Console.WriteLine(string.Format("Sheet {0} does not exist", studentsSpecificSheet));
                                 PrintUsageAndExit(7);
                             }
                         }
                         else
                         {
-                            LogOutputWithNewLine("Processing student presentations...");
+                            LogOutputWithNewLine("Processing students presentations...");
                             drive.ProcessStudentsPresentations();
                         }
 
@@ -183,9 +188,12 @@ namespace GoogleDrive
                     }
 
                 default:
-
-                    Console.WriteLine(string.Format("Mode {0} is invalid. Supported modes are only: 'Teacher' or 'Students'", mode));
-                    PrintUsageAndExit(8);
+                    //Empty mode is allowed only when clearing and rebuilding cache
+                    if (!clearAndRebuildCache)
+                    {
+                        Console.WriteLine(string.Format("Mode {0} is invalid. Supported modes are only: 'Teacher' or 'Students'", mode));
+                        PrintUsageAndExit(8);
+                    }
 
                     break;
             }
@@ -240,9 +248,10 @@ namespace GoogleDrive
             Console.WriteLine("/h /help /?                  Prints this screen");
             Console.WriteLine("/m:Teacher|Students          Mode: 'Teacher' or 'Students'");
             Console.WriteLine("/p:presentationId            Process only the teacher presentation");
-            Console.WriteLine("/r:rootfolder                Process only a specific teacher root folder (e.g. 801, 802, ...)");
-            Console.WriteLine("/s:sheetname                 Process students presentations, start from sheet by its name");
+            Console.WriteLine("/r:rootfolder                Process only a specific teacher root folder (e.g. 182, 381, ...)");
+            Console.WriteLine("/s:sheetname                 Process students presentations, only this specific sheet");
             Console.WriteLine("/t                           Skip time stamp check");
+            Console.WriteLine("/c                           Clear and rebuild local cache files");
             Environment.Exit(exitCode);
         }
     }

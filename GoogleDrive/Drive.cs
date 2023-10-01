@@ -19,6 +19,7 @@ using System.Threading;
 using System.Text.RegularExpressions;
 using Google.Apis.Sheets.v4.Data;
 using Link = Google.Apis.Slides.v1.Data.Link;
+using File = System.IO.File;
 
 namespace GoogleDrive
 {
@@ -167,7 +168,7 @@ namespace GoogleDrive
         {
             // deserialize JSON directly from a file
             string cacheFileName = ConfigurationManager.AppSettings[name + "Cache"];
-            if (System.IO.File.Exists(cacheFileName))
+            if (File.Exists(cacheFileName))
             {
                 using (StreamReader file = System.IO.File.OpenText(cacheFileName))
                 {
@@ -193,6 +194,20 @@ namespace GoogleDrive
         #endregion
 
         #region Methods
+
+        /// <summary>
+        /// Deletes a local cache file
+        /// </summary>
+        /// <param name="name"></param>
+        public static void DeleteLocalFile(string name)
+        {
+            string cacheFileName = ConfigurationManager.AppSettings[name + "Cache"];
+            if (File.Exists(cacheFileName))
+            {
+                File.Delete(cacheFileName);
+            }
+
+        }
 
         /// <summary>
         /// Get a folder in the tree by its folder id (recurssive)
@@ -354,6 +369,7 @@ namespace GoogleDrive
             {
                 var folderRequest = driveService.Files.List();
                 folderRequest.Q = filter;
+                folderRequest.OrderBy = "name";
                 folderRequest.Spaces = "drive";
                 folderRequest.Fields = "nextPageToken, files(id,name)";
                 folderRequest.PageToken = pageToken;
@@ -649,7 +665,7 @@ namespace GoogleDrive
         #endregion
 
         #region C'Tor/D'Tor
-        public Drive()
+        public Drive(bool clearAndRebuildCache)
         {
             #region Authentication to Google
             UserCredential credential;
@@ -695,6 +711,12 @@ namespace GoogleDrive
 
             #region Cache
 
+            if (clearAndRebuildCache)
+            {
+                Cache.DeleteLocalFile("Teacher");
+                Cache.DeleteLocalFile("Students");
+            }
+
             TeacherCache = Cache.Load(driveService, "Teacher");
             StudentsCache = Cache.Load(driveService, "Students");
 
@@ -702,10 +724,10 @@ namespace GoogleDrive
 
             #region Load Configiguration Variables
 
-            lastSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "LAST_SLIDE" };
-            nextSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "NEXT_SLIDE" };
-            prevSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "PREVIOUS_SLIDE" };
-            firstSlidelink = new Google.Apis.Slides.v1.Data.Link() { RelativeLink = "FIRST_SLIDE" };
+            lastSlidelink = new Link() { RelativeLink = "LAST_SLIDE" };
+            nextSlidelink = new Link() { RelativeLink = "NEXT_SLIDE" };
+            prevSlidelink = new Link() { RelativeLink = "PREVIOUS_SLIDE" };
+            firstSlidelink = new Link() { RelativeLink = "FIRST_SLIDE" };
 
             firstSlideText = ConfigurationManager.AppSettings["FirstSlideText"] + "\t";
             prevSlideText = ConfigurationManager.AppSettings["PrevSlideText"] + "\t";
@@ -1088,28 +1110,21 @@ namespace GoogleDrive
         /// <summary>
         /// Process students presentations
         /// </summary>
-        public void ProcessStudentsPresentations(string startFromSheet = null, bool skipTimeStampCheck = false)
+        public void ProcessStudentsPresentations(string specificSheet = null, bool skipTimeStampCheck = false)
         {
             //Open masterplan spreadsheet
             var masterPlanSpreadsheetRequest = sheetService.Spreadsheets.Get(masterPlanSpreadsheetId);
             var masterPlanSpreadsheet = masterPlanSpreadsheetRequest.Execute();
 
             //Loop through all non-hidden sheets in the masterplan spreadsheet
-
-            bool inputSheetStarted = false;
             foreach (var sheet in masterPlanSpreadsheet.Sheets)
             {
                 if (
                     (sheet.Properties.Hidden.HasValue && sheet.Properties.Hidden.Value == true) ||
-                    (startFromSheet != null && sheet.Properties.Title != startFromSheet && !inputSheetStarted)
+                    (specificSheet != null && sheet.Properties.Title != specificSheet)
                     )
                 {
                     continue; //To the next sheet
-                }
-
-                if (sheet.Properties.Title == startFromSheet)
-                {
-                    inputSheetStarted = true;
                 }
 
                 //Load sheet data
@@ -1413,7 +1428,7 @@ namespace GoogleDrive
         /// </summary>
         /// <param name="shape"></param>
         /// <returns></returns>
-        private Google.Apis.Slides.v1.Data.Link GetLinkFromShape(Google.Apis.Slides.v1.Data.Shape shape)
+        private Link GetLinkFromShape(Google.Apis.Slides.v1.Data.Shape shape)
         {
             if (shape != null &&
                 shape.Text != null &&
