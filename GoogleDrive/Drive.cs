@@ -20,6 +20,7 @@ using System.Text.RegularExpressions;
 using Google.Apis.Sheets.v4.Data;
 using Link = Google.Apis.Slides.v1.Data.Link;
 using File = System.IO.File;
+using System.Globalization;
 
 namespace GoogleDrive
 {
@@ -657,6 +658,7 @@ namespace GoogleDrive
         private readonly string regexNonTeachingSlidePattern;
         private readonly string copySlidesAppScriptId;
         private readonly string copySlidesAppScriptFunction;
+        private readonly CultureInfo dateTimeCulture;
 
         private Regex regexSpreadsheetHyperlinkExtractId;
         private Regex regexSpreadsheetHyperlinkExtractName;
@@ -768,6 +770,7 @@ namespace GoogleDrive
             regexNonTeachingSlidePattern = ConfigurationManager.AppSettings["RegexNonTeachingSlidePattern"];
             copySlidesAppScriptId = ConfigurationManager.AppSettings["CopySlidesAppScriptId"];
             copySlidesAppScriptFunction = ConfigurationManager.AppSettings["CopySlidesAppScriptFunction"];
+            dateTimeCulture = new CultureInfo(ConfigurationManager.AppSettings["DateTimeCulture"]);
 
             regexSpreadsheetHyperlinkExtractId = new Regex(regexSpreadsheetHyperlinkExtractIdPattern);
             regexSpreadsheetHyperlinkExtractName = new Regex(regexSpreadsheetHyperlinkExtractNamePattern);
@@ -775,6 +778,8 @@ namespace GoogleDrive
 
             pptApplication = new Application();
             pptPresentations = pptApplication.Presentations;
+
+
 
             #endregion
         }
@@ -854,7 +859,7 @@ namespace GoogleDrive
                 }
                 if (presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                 {
-                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME],dateTimeCulture))
                     {
                         //File was not modified since it was last processed - skip
                         PresentationSkipped.Invoke(this, null);
@@ -1202,7 +1207,7 @@ namespace GoogleDrive
                         }
                         if (targetPresentationDriveFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                         {
-                            if (!skipTimeStampCheck && sourcePresentationDriveFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                            if (!skipTimeStampCheck && sourcePresentationDriveFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME],dateTimeCulture))
                             {
                                 //Source file was not modified since the target was last processed - skip
                                 PresentationSkipped.Invoke(this, null);
