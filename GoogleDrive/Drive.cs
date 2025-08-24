@@ -545,6 +545,36 @@ namespace GoogleDrive
 
     #endregion
 
+    #region Class Slide Skipped
+
+    public class SlideSkipped
+    {
+        #region Properties
+
+        public string PresentationId { get; private set; }
+        public string PresentationName { get; private set; }
+        public int SlideId { get; private set; }
+        public int SheetRowNumber { get; private set; }
+
+        public string SkipReason { get; private set; }
+
+        #endregion
+
+        #region C'Tor/Dtor
+        public SlideSkipped(string presentationId, string presentationName, int slideId, int sheetRowNumber, string skipReason)
+        {
+            PresentationId = presentationId;
+            PresentationName = presentationName;
+            SlideId = slideId;
+            SheetRowNumber = sheetRowNumber;
+            SkipReason = skipReason;
+        }
+        #endregion
+    }
+
+    #endregion
+
+
     #region Class ProcessFolderEventArgs
 
     public class ProcessFolderEventArgs : EventArgs
@@ -588,6 +618,25 @@ namespace GoogleDrive
 
         #endregion
     }
+
+    public class SlideSkippedEventArgs : EventArgs
+    {
+        #region Properties
+
+        public SlideSkipped SlideSkipped { get; set; }
+
+        #endregion
+
+        #region C'Tor/D'Tor
+
+        public SlideSkippedEventArgs(SlideSkipped slideSkipped)
+        {
+            SlideSkipped = slideSkipped;
+        }
+
+        #endregion
+    }
+
 
     #endregion
 
@@ -1222,6 +1271,14 @@ namespace GoogleDrive
 #region Check if and which slides are to be copied
 
                     //Get the teachers presentation
+                    if (sourcePresentationId == null || sourcePresentationId == string.Empty)
+                    {
+                        //Source file was not modified since the target was last processed - skip
+                        PresentationSkipped.Invoke(this, new SlideSkippedEventArgs(new SlideSkipped(null,null,0,rowNumber,"Empty presentationId")));
+                        rowNumber++;
+                        continue;
+                    }
+
                     var sourcePresentationRequest = slidesService.Presentations.Get(sourcePresentationId);
                     var sourcePresentation = sourcePresentationRequest.Execute();
 

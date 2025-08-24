@@ -205,6 +205,20 @@ namespace GoogleDrive
         {
             lastFolderSlidesSkipped++;
             totalSlidesSkipped++;
+            if (e != null)
+            {
+                var slideSkippedEventArgs = (SlideSkippedEventArgs)e;
+                if (slideSkippedEventArgs.SlideSkipped.SheetRowNumber > 0)
+                {
+                    //Students mode - assuming empty row
+                    LogOutputWithNewLine(string.Format("Row number {0} skipped in sheet, Reason: {1}", slideSkippedEventArgs.SlideSkipped.SheetRowNumber, slideSkippedEventArgs.SlideSkipped.SkipReason));
+                }
+                else
+                {
+                    //Teachers mode - assuming empty row
+                    LogOutputWithNewLine(string.Format("Presentation: {0} {1}, Slide: {2}, Error: {3}", slideSkippedEventArgs.SlideSkipped.PresentationId, slideSkippedEventArgs.SlideSkipped.PresentationName, slideSkippedEventArgs.SlideSkipped.SlideId, slideSkippedEventArgs.SlideSkipped.SkipReason));
+                }
+            }
             OutputProgress();
         }
 
