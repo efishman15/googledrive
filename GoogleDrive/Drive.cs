@@ -1202,6 +1202,11 @@ namespace GoogleDrive
                 {
                     #region Parse columns
 
+                    //Check if this row is only a placeholder for a master presentation to come
+                    if (row.Count <= 1)
+                    {
+                        continue;
+                    }
                     var mainFolderId = regexSpreadsheetHyperlinkExtractId.Match(row[0].ToString()).Groups[1].Value;
                     var mainFolderName = ReplaceDoubleQuotesWithSingle(regexSpreadsheetHyperlinkExtractName.Match(row[0].ToString()).Groups[1].Value);
                     var subFolderId = regexSpreadsheetHyperlinkExtractId.Match(row[1].ToString()).Groups[1].Value;
