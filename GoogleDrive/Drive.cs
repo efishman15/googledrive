@@ -574,7 +574,6 @@ namespace GoogleDrive
 
     #endregion
 
-
     #region Class ProcessFolderEventArgs
 
     public class ProcessFolderEventArgs : EventArgs
