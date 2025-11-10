@@ -1204,6 +1204,7 @@ namespace GoogleDrive
                     //Check if this row is only a placeholder for a master presentation to come
                     if (row.Count <= 1)
                     {
+                        rowNumber++;
                         continue;
                     }
                     var mainFolderId = regexSpreadsheetHyperlinkExtractId.Match(row[0].ToString()).Groups[1].Value;
