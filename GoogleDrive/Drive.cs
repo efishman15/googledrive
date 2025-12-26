@@ -706,7 +706,6 @@ namespace GoogleDrive
         private readonly string regexNonTeachingSlidePattern;
         private readonly string copySlidesAppScriptId;
         private readonly string copySlidesAppScriptFunction;
-        private readonly CultureInfo dateTimeCulture;
 
         private Regex regexSpreadsheetHyperlinkExtractId;
         private Regex regexSpreadsheetHyperlinkExtractName;
@@ -818,7 +817,6 @@ namespace GoogleDrive
             regexNonTeachingSlidePattern = ConfigurationManager.AppSettings["RegexNonTeachingSlidePattern"];
             copySlidesAppScriptId = ConfigurationManager.AppSettings["CopySlidesAppScriptId"];
             copySlidesAppScriptFunction = ConfigurationManager.AppSettings["CopySlidesAppScriptFunction"];
-            dateTimeCulture = new CultureInfo(ConfigurationManager.AppSettings["DateTimeCulture"]);
 
             regexSpreadsheetHyperlinkExtractId = new Regex(regexSpreadsheetHyperlinkExtractIdPattern);
             regexSpreadsheetHyperlinkExtractName = new Regex(regexSpreadsheetHyperlinkExtractNamePattern);
@@ -907,7 +905,7 @@ namespace GoogleDrive
                 }
                 if (presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                 {
-                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME],dateTimeCulture))
+                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= DateSmartParse(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
                     {
                         //File was not modified since it was last processed - skip
                         PresentationSkipped.Invoke(this, null);
@@ -1261,7 +1259,7 @@ namespace GoogleDrive
                         }
                         if (targetPresentationDriveFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                         {
-                            if (!skipTimeStampCheck && sourcePresentationDriveFile.ModifiedTimeDateTimeOffset <= Convert.ToDateTime(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME],dateTimeCulture))
+                            if (!skipTimeStampCheck && sourcePresentationDriveFile.ModifiedTimeDateTimeOffset <= DateSmartParse(targetPresentationDriveFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
                             {
                                 //Source file was not modified since the target was last processed - skip
                                 PresentationSkipped.Invoke(this, null);
@@ -1407,17 +1405,46 @@ namespace GoogleDrive
         public event EventHandler PresentationError;
         public event EventHandler FolderProcessingStarted;
 
-#endregion
+        #endregion
 
-#region Private Methods
+        #region Private Methods
 
-        /// <summary>
-        /// Exports and Download the presentation as a Microsoft Powerpoint file (.pptx) and validates each slide:
-        /// if a slide contains at least one image object (without a border, e.g. a question) - 
-        /// it must contain animations if there are text boxes or lines/arrows
-        /// </summary>
-        /// <param name="cachePresentation"></param>
-        private void ValidatePresentationAnimations(CachePresentation cachePresentation)
+    /// <summary>
+    /// Tries to parse a date string in Hebrew culture first, then in English
+    /// </summary>
+    /// <param name="dateString"></param>
+    /// <returns></returns>
+    /// <exception cref="FormatException"></exception>
+    private DateTime DateSmartParse(string dateString)
+    {
+        var hebrewCulture = new CultureInfo("he-IL");
+        var usCulture = new CultureInfo("en-US");
+
+        // 1. Priority: Try Hebrew/Israel format (dd/MM/yyyy)
+        // This ensures 04/05/2025 is read as May 4th.
+        if (DateTime.TryParse(dateString, hebrewCulture, DateTimeStyles.None, out DateTime result))
+        {
+            return result;
+        }
+
+        // 2. Fallback: Try US format (MM/dd/yyyy)
+        // This ensures 12/26/2025 is read as Dec 26th.
+        if (DateTime.TryParse(dateString, usCulture, DateTimeStyles.None, out result))
+        {
+            return result;
+        }
+
+        // 3. If both fail, handle the error (throw exception or return default)
+        throw new FormatException($"Unable to parse '{dateString}' in either he-IL or en-US formats.");
+    }
+
+    /// <summary>
+    /// Exports and Download the presentation as a Microsoft Powerpoint file (.pptx) and validates each slide:
+    /// if a slide contains at least one image object (without a border, e.g. a question) - 
+    /// it must contain animations if there are text boxes or lines/arrows
+    /// </summary>
+    /// <param name="cachePresentation"></param>
+    private void ValidatePresentationAnimations(CachePresentation cachePresentation)
         {
             bool slideHasStudentQuestion;
             bool slideHasSolution;
