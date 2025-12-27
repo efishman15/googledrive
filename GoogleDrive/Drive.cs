@@ -706,6 +706,8 @@ namespace GoogleDrive
         private readonly string regexNonTeachingSlidePattern;
         private readonly string copySlidesAppScriptId;
         private readonly string copySlidesAppScriptFunction;
+        private readonly CultureInfo heCulture;
+        private readonly CultureInfo usCulture;
 
         private Regex regexSpreadsheetHyperlinkExtractId;
         private Regex regexSpreadsheetHyperlinkExtractName;
@@ -825,7 +827,8 @@ namespace GoogleDrive
             pptApplication = new Application();
             pptPresentations = pptApplication.Presentations;
 
-
+            heCulture = new CultureInfo("he-IL");
+            usCulture = new CultureInfo("en-US");
 
             #endregion
         }
@@ -1417,12 +1420,9 @@ namespace GoogleDrive
     /// <exception cref="FormatException"></exception>
     private DateTime DateSmartParse(string dateString)
     {
-        var hebrewCulture = new CultureInfo("he-IL");
-        var usCulture = new CultureInfo("en-US");
-
         // 1. Priority: Try Hebrew/Israel format (dd/MM/yyyy)
         // This ensures 04/05/2025 is read as May 4th.
-        if (DateTime.TryParse(dateString, hebrewCulture, DateTimeStyles.None, out DateTime result))
+        if (DateTime.TryParse(dateString, heCulture, DateTimeStyles.None, out DateTime result))
         {
             return result;
         }
