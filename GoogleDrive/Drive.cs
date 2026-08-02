@@ -908,7 +908,8 @@ namespace GoogleDrive
                 }
                 if (presentationFile.AppProperties.ContainsKey(APP_PROPERTY_NORMALIZE_TIME))
                 {
-                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= DateSmartParse(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]))
+                    var parsedAppPropertyModifiedDate = DateSmartParse(presentationFile.AppProperties[APP_PROPERTY_NORMALIZE_TIME]);
+                    if (!skipTimeStampCheck && presentationFile.ModifiedTimeDateTimeOffset <= parsedAppPropertyModifiedDate)
                     {
                         //File was not modified since it was last processed - skip
                         PresentationSkipped.Invoke(this, null);
@@ -1705,8 +1706,8 @@ namespace GoogleDrive
         /// <param name="presentationFile"></param>
         private void MarkPresentationAsProcessed(Google.Apis.Drive.v3.Data.File presentationFile)
         {
-               //Make sure normalize time is always after the modified time (15 seconds after)
-               var normalizeTime = DateTime.Now.AddSeconds(15).ToString();
+            //Make sure normalize time is always after the modified time (15 seconds after)
+            var normalizeTime = DateTime.Now.AddSeconds(15).ToString(heCulture);
             if (presentationFile.AppProperties == null)
             {
                 presentationFile.AppProperties = new Dictionary<string, string>();
