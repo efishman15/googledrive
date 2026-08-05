@@ -1,26 +1,27 @@
-﻿using Google.Apis.Auth.OAuth2;
+﻿using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.Globalization;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
-using Google.Apis.Services;
-using Google.Apis.Sheets.v4;
-using Google.Apis.Slides.v1;
-using Google.Apis.Slides.v1.Data;
 using Google.Apis.Script.v1;
 using Google.Apis.Script.v1.Data;
+using Google.Apis.Services;
+using Google.Apis.Sheets.v4;
+using Google.Apis.Sheets.v4.Data;
+using Google.Apis.Slides.v1;
+using Google.Apis.Slides.v1.Data;
 using Google.Apis.Util.Store;
 using Microsoft.Office.Core;
 using Microsoft.Office.Interop.PowerPoint;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
-using System;
-using System.Collections.Generic;
-using System.Configuration;
-using System.IO;
-using System.Threading;
-using System.Text.RegularExpressions;
-using Google.Apis.Sheets.v4.Data;
-using Link = Google.Apis.Slides.v1.Data.Link;
 using File = System.IO.File;
-using System.Globalization;
+using Link = Google.Apis.Slides.v1.Data.Link;
 
 namespace GoogleDrive
 {
@@ -351,6 +352,19 @@ namespace GoogleDrive
             presentationMimeType = ConfigurationManager.AppSettings["PresentationMimeType"];
         }
 
+        private readonly object presentationsLock = new object();
+
+        private List<string> CollectAllFolderIds(Dictionary<string, CacheFolder> root)
+        {
+            var ids = new List<string>();
+            foreach (var key in root.Keys)
+            {
+                ids.Add(key);
+                ids.AddRange(CollectAllFolderIds(root[key].Folders));
+            }
+            return ids;
+        }
+
         /// <summary>
         /// Build recursivelly a cache of all folders and presentations under a top root folder in Google Drive
         /// </summary>
@@ -404,35 +418,56 @@ namespace GoogleDrive
                 pageToken = folderResult.NextPageToken;
             } while (pageToken != null);
 
+            // after foldersFilter is finalized:
             if (isTop)
             {
                 if (foldersFilter == string.Empty)
                 {
-                    //No folders in root folder - just files
+                    // No folders in root folder - just files in root
                     foldersFilter = "('" + rootFolderId + "' in parents) ";
                 }
                 else
                 {
                     foldersFilter += ")";
                 }
-                filter = foldersFilter + " AND (mimeType = '" + presentationMimeType + "') AND trashed=false";
-                do
-                {
-                    var filesRequest = driveService.Files.List();
-                    filesRequest.Q = filter;
-                    filesRequest.Spaces = "drive";
-                    filesRequest.Fields = "nextPageToken, files(id, name, parents)";
-                    filesRequest.PageToken = pageToken;
-                    var fileResult = filesRequest.Execute();
 
-                    foreach (var file in fileResult.Files)
+                // Gather all folder ids (including nested) from the built cache
+                var allFolderIds = CollectAllFolderIds(Folders);
+                if (allFolderIds.Count == 0)
+                {
+                    // fallback: just root
+                    allFolderIds.Add(rootFolderId);
+                }
+
+                // Parallelize per-folder Files.List with controlled degree of concurrency
+                var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = 8 }; // tune as needed
+                Parallel.ForEach(allFolderIds, parallelOptions, folderId =>
+                {
+                    string pageTokenFiles = null;
+                    do
                     {
-                        //If file is filed in more than 1 folder, add it only under the first folder
-                        //For the sake of this program - each presentation should be processed only once
-                        AddPresentationToFolder(file.Parents[0], file.Id, file.Name);
-                    }
-                    pageToken = fileResult.NextPageToken;
-                } while (pageToken != null);
+                        var filesRequest = driveService.Files.List();
+                        filesRequest.Q = $"'{folderId}' in parents AND (mimeType = '{presentationMimeType}') AND trashed=false";
+                        filesRequest.Spaces = "drive";
+                        filesRequest.Fields = "nextPageToken, files(id, name, parents)";
+                        filesRequest.PageToken = pageTokenFiles;
+                        var fileResult = filesRequest.Execute();
+
+                        if (fileResult?.Files != null)
+                        {
+                            foreach (var file in fileResult.Files)
+                            {
+                                // Protect cache mutation
+                                lock (presentationsLock)
+                                {
+                                    // AddPresentationToFolder updates shared cache state
+                                    AddPresentationToFolder(file.Parents[0], file.Id, file.Name);
+                                }
+                            }
+                        }
+                        pageTokenFiles = fileResult?.NextPageToken;
+                    } while (pageTokenFiles != null);
+                });
             }
         }
 
